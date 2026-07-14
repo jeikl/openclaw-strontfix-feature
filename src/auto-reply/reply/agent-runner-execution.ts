@@ -3520,6 +3520,8 @@ async function runAgentTurnWithFallbackInternal(
         kind: "final",
         payload: markAgentRunFailureReplyPayload({
           text: userVisibleFallbackText,
+          // Preserve formatted upstream error for channel classification; text stays user-safe.
+          rawError: message,
         }),
       };
     }
