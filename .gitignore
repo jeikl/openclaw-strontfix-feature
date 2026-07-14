@@ -303,3 +303,9 @@ extensions/diffs-language-pack/assets/viewer-runtime.js
 /.opengrep-out/
 /.crabbox-artifacts
 .comux*
+
+# Local codegraph tooling
+.codegraph/
+
+# Local personal source patches (keep tracked patches/ for pnpm deps)
+patches/local/
