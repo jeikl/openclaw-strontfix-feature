@@ -790,9 +790,9 @@ export type MessageToolsConfig = {
   /**
    * After a successful message send, append a model-visible + gateway-visible
    * `outbound_message` record with the full original tool args and from/to channel
-   * identity. Default: off (legacy delivery-mirror only; model replay drops mirrors).
+   * identity. Default: target (write to the outbound peer session).
    *
-   * - off: no outbound_message (existing delivery-mirror behavior)
+   * - off: no outbound_message (legacy delivery-mirror only; model replay drops mirrors)
    * - target: write to the outbound target session (group/DM)
    * - source: write to the requester session that called the tool
    * - both: write to target and source

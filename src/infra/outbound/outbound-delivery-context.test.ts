@@ -14,21 +14,21 @@ import {
 } from "./outbound-delivery-context.js";
 
 describe("resolveMessageDeliveryContextMode", () => {
-  it("defaults to off", () => {
-    expect(resolveMessageDeliveryContextMode({ cfg: {} })).toBe("off");
+  it("defaults to target", () => {
+    expect(resolveMessageDeliveryContextMode({ cfg: {} })).toBe("target");
     expect(
       resolveMessageDeliveryContextMode({
         cfg: { tools: { message: {} } },
       }),
-    ).toBe("off");
+    ).toBe("target");
   });
 
   it("reads global and agent override", () => {
     expect(
       resolveMessageDeliveryContextMode({
-        cfg: { tools: { message: { deliveryContext: "target" } } },
+        cfg: { tools: { message: { deliveryContext: "off" } } },
       }),
-    ).toBe("target");
+    ).toBe("off");
     expect(
       resolveMessageDeliveryContextMode({
         cfg: {
@@ -173,7 +173,7 @@ describe("buildOutboundMessagePayload", () => {
       audience: "target",
     });
     expect(text).toContain(
-      "此条信息为他人调用我向当前我对话的用户发送的信息，请不要调用session相关技能搜索确认",
+      "此条信息为他人调用我向当前对话的用户发送的信息。如果用户问你是谁向他发了消息、能否看到来源等，不需要调用 session 相关工具搜索确认",
     );
     expect(text).toContain("内容：我是宝宝");
     expect(text).toContain("附件：/mnt/share/a.png");
@@ -181,6 +181,12 @@ describe("buildOutboundMessagePayload", () => {
     expect(text).toContain("来源群名：机器人测试群");
     expect(text).toContain("调用人id：staff-1");
     expect(text).toContain("调用人昵称：不是不是来夫人");
+    expect(text).toContain("【回复指引】");
+    expect(text).toContain("要在群里回复，还是直接私聊通知他");
+    expect(text).toContain("目标设定为【来源群id】原样复制：cid123");
+    expect(text).toContain("目标设定为【调用人id】原样复制：staff-1");
+    expect(text).toContain("不可以更改任何一个字符、字母的大小写");
+    expect(text).toContain("不是不是来夫人，你发送的消息当前对话的用户收到了，这是他给你的回复");
     expect(text).toContain("[原始信息]");
     expect(text).not.toContain("来源类型：私聊");
     expect(text).toContain('"type": "outbound_message"');
@@ -226,8 +232,12 @@ describe("buildOutboundMessagePayload", () => {
     expect(text).toContain("调用人id：staff-9");
     expect(text).toContain("调用人昵称：小明");
     expect(text).toContain("内容：你好");
+    expect(text).toContain("【回复指引】");
+    expect(text).toContain("目标设定为【调用人id】原样复制：staff-9");
+    expect(text).toContain("不可以更改任何一个字符、字母的大小写");
     expect(text).not.toContain("来源群id");
     expect(text).not.toContain("来源群名");
+    expect(text).not.toContain("要在群里回复");
   });
 
   it("cleans Control UI style display names", () => {

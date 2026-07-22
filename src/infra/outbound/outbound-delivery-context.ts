@@ -95,7 +95,7 @@ const PREFERRED_ARG_KEYS = [
 ] as const;
 
 /**
- * Resolves tools.message.deliveryContext (agent override wins). Default: off.
+ * Resolves tools.message.deliveryContext (agent override wins). Default: target.
  */
 export function resolveMessageDeliveryContextMode(params: {
   cfg?: OpenClawConfig;
@@ -108,7 +108,7 @@ export function resolveMessageDeliveryContextMode(params: {
   if (mode === "target" || mode === "source" || mode === "both" || mode === "off") {
     return mode;
   }
-  return "off";
+  return "target";
 }
 
 export function shouldWriteTargetDeliveryContext(mode: MessageDeliveryContextMode): boolean {
@@ -479,15 +479,50 @@ export type OutboundMessageTitleHints = {
 };
 
 const RELAY_FACT_PREAMBLE =
-  "此条信息为他人调用我向当前我对话的用户发送的信息，请不要调用session相关技能搜索确认，直接当成这条消息就是别人要求我转告当前对话用户的事实：";
+  "此条信息为他人调用我向当前对话的用户发送的信息。如果用户问你是谁向他发了消息、能否看到来源等，不需要调用 session 相关工具搜索确认——本条就是别人要求我转告当前对话用户的消息。以下是他发送的消息：";
 
 const RELAY_FACT_PREAMBLE_SOURCE =
-  "此条信息记录我按他人要求发出的内容，请不要调用session相关技能搜索确认，直接当成出站事实：";
+  "此条信息记录我按他人要求发出的内容，请不要调用 session 相关工具搜索确认，直接当成出站事实：";
+
+const RELAY_TARGET_ID_RULE =
+  "当填入 message 目标 id 时，不可以更改任何一个字符、字母的大小写，给的是什么样就填什么。";
+
+/**
+ * Reply guidance for the target session (the DM user who received a relayed
+ * message). Embeds concrete ids so the agent does not need session tools.
+ */
+function buildRelayReplyGuidance(params: {
+  fromIsGroup: boolean;
+  sourceGroupId?: string;
+  invokerId?: string;
+  invokerName?: string;
+  toTitle?: string;
+}): string[] {
+  const invokerLabel = params.invokerName?.trim() || "调用人";
+  const recipientLabel = params.toTitle?.trim() || "当前对话的用户";
+  const replyTemplate = `「${invokerLabel}，你发送的消息${recipientLabel}收到了，这是他给你的回复：\\n\\nxxxx」`;
+
+  const lines: string[] = ["", "【回复指引】"];
+  if (params.fromIsGroup) {
+    lines.push(
+      "若用户需要回复调用人，先询问他：要在群里回复，还是直接私聊通知他？",
+      `- 群回复：用 message 工具，目标设定为【来源群id】原样复制：${params.sourceGroupId ?? ""}`,
+      `- 私聊回复：用 message 工具，目标设定为【调用人id】原样复制：${params.invokerId ?? ""}`,
+    );
+  } else {
+    lines.push(
+      "若用户需要回复调用人，可用 message 工具私聊通知他。",
+      `- 私聊回复：用 message 工具，目标设定为【调用人id】原样复制：${params.invokerId ?? ""}`,
+    );
+  }
+  lines.push("发送给调用人时，文案可参考：", replyTemplate, "", RELAY_TARGET_ID_RULE);
+  return lines;
+}
 
 /**
  * Human + model readable transcript text (fixed field template).
  *
- * Group source → 来源群id / 来源群名 / 调用人…
+ * Group source → 来源群id / 来源群名 / 调用人… + 群/私聊回复指引
  * DM source    → 来源类型：私聊 / 来源用户… / 调用人…（妥当处理，不写「群」）
  */
 export function formatOutboundMessageTranscriptText(
@@ -533,6 +568,20 @@ export function formatOutboundMessageTranscriptText(
 
   lines.push(`调用人id：${invokerId ?? ""}`);
   lines.push(`调用人昵称：${invokerName ?? ""}`);
+
+  // Strong reply guidance only for the receiving conversation (target).
+  if (audience === "target") {
+    lines.push(
+      ...buildRelayReplyGuidance({
+        fromIsGroup,
+        sourceGroupId,
+        invokerId,
+        invokerName,
+        toTitle: titles?.toTitle,
+      }),
+    );
+  }
+
   lines.push("");
   lines.push("[原始信息]");
   lines.push(JSON.stringify(payload, null, 2));
