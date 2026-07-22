@@ -752,6 +752,12 @@ export type ToolsConfig = {
   };
 };
 
+/**
+ * Where to write model+gateway-visible outbound message context after a successful
+ * `message(action=send)`. Default `off` preserves legacy delivery-mirror-only behavior.
+ */
+export type MessageDeliveryContextMode = "off" | "target" | "source" | "both";
+
 export type MessageToolsConfig = {
   /**
    * @deprecated Use tools.message.crossContext settings.
@@ -781,4 +787,15 @@ export type MessageToolsConfig = {
     /** Enable broadcast action (default: true). */
     enabled?: boolean;
   };
+  /**
+   * After a successful message send, append a model-visible + gateway-visible
+   * `outbound_message` record with the full original tool args and from/to channel
+   * identity. Default: off (legacy delivery-mirror only; model replay drops mirrors).
+   *
+   * - off: no outbound_message (existing delivery-mirror behavior)
+   * - target: write to the outbound target session (group/DM)
+   * - source: write to the requester session that called the tool
+   * - both: write to target and source
+   */
+  deliveryContext?: MessageDeliveryContextMode;
 };

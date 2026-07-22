@@ -2463,6 +2463,27 @@ describe("abortChatRun", () => {
       "device identity required (use HTTPS/localhost or allow insecure auth explicitly)",
     );
   });
+
+  it("retries session-scoped abort when runId-targeted abort returns aborted:false", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, aborted: false, runIds: [] })
+      .mockResolvedValueOnce({ ok: true, aborted: true, runIds: ["run-live"] });
+    const state = createState({
+      connected: true,
+      chatRunId: "run-stale",
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    await expect(abortChatRun(state)).resolves.toBe(true);
+    expect(request).toHaveBeenNthCalledWith(1, "chat.abort", {
+      sessionKey: "main",
+      runId: "run-stale",
+    });
+    expect(request).toHaveBeenNthCalledWith(2, "chat.abort", {
+      sessionKey: "main",
+    });
+  });
 });
 
 describe("loadChatHistory retry handling", () => {

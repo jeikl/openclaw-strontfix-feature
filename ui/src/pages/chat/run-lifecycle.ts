@@ -107,10 +107,13 @@ export function isChatBusy(host: { chatSending?: boolean; chatRunId?: string | n
 
 export function hasAbortableSessionRun(host: {
   chatRunId?: string | null;
+  chatSending?: boolean;
   sessionKey: string;
   sessionsResult?: SessionsListResult | null;
 }): boolean {
-  if (host.chatRunId) {
+  // chatSending covers the pre-ACK window where chat.send is in flight but the
+  // Gateway has not yet (or has not yet been observed to) set chatRunId.
+  if (host.chatRunId || host.chatSending) {
     return true;
   }
   return Boolean(
@@ -126,17 +129,50 @@ export function isChatStopCommand(text: string) {
 
 type ChatAbortOptions = { preserveDraft?: boolean };
 
+function isChatAbortResultSuccessful(result: unknown): boolean {
+  if (!result || typeof result !== "object") {
+    return false;
+  }
+  const record = result as Record<string, unknown>;
+  if (record.aborted === true) {
+    return true;
+  }
+  return Array.isArray(record.runIds) && record.runIds.length > 0;
+}
+
+/**
+ * Abort the active chat run for the selected session.
+ *
+ * Gateway may return `{ ok: true, aborted: false }` when a client-held runId is
+ * stale or already retired. Mirror Workboard: fall back to a session-scoped
+ * abort so Stop / `/stop` still cancels whatever is live on that session.
+ */
 export async function abortChatRun(state: ChatAbortRunState): Promise<boolean> {
   if (!state.client || !state.connected) {
     return false;
   }
   const runId = state.chatRunId;
+  const sessionParams = {
+    sessionKey: state.sessionKey,
+    ...scopedAgentParamsForSession(state, state.sessionKey),
+  };
   try {
-    await state.client.request("chat.abort", {
-      sessionKey: state.sessionKey,
-      ...scopedAgentParamsForSession(state, state.sessionKey),
+    let abortResult = await state.client.request("chat.abort", {
+      ...sessionParams,
       ...(runId ? { runId } : {}),
     });
+    let aborted = isChatAbortResultSuccessful(abortResult);
+    if (!aborted && runId) {
+      abortResult = await state.client.request("chat.abort", sessionParams);
+      aborted = isChatAbortResultSuccessful(abortResult);
+    }
+    if (!aborted) {
+      setChatError(
+        state,
+        "Nothing to stop — the run may already be finishing or no longer active.",
+      );
+      return false;
+    }
     return true;
   } catch (err) {
     setChatError(state, formatConnectError(err));

@@ -615,6 +615,18 @@ async function sendQueuedChatMessage(
     reconcileChatRunLifecycle(host as unknown as Parameters<typeof reconcileChatRunLifecycle>[0], {
       clearRunStatus: true,
     });
+    // Adopt the client run id before chat.send ACK so Stop / chat.abort can target
+    // in-flight admission (attachment prep, lifecycle queue). Without this, the
+    // composer only shows a disabled Send while chatSending is true.
+    if (!host.chatRunId) {
+      host.chatRunId = runId;
+      if (host.chatStream == null) {
+        host.chatStream = "";
+        (host as ChatHost & { chatStreamStartedAt?: number | null }).chatStreamStartedAt =
+          startedAt;
+      }
+    }
+    host.requestUpdate?.();
   }
 
   try {
@@ -655,14 +667,14 @@ async function sendQueuedChatMessage(
           {
             outcome: "interrupted",
             sessionStatus: ack.status === "error" ? "failed" : "killed",
-            runId: ack.runId,
+            runId: ack.runId ?? runId,
             sessionKey,
             clearLocalRun: true,
             clearChatStream: true,
             clearToolStream: true,
             clearSideResultTerminalRuns: true,
             publishRunStatus: false,
-            armLocalTerminalReconcile: ack.runId === runId,
+            armLocalTerminalReconcile: (ack.runId ?? runId) === runId,
           },
         );
         setChatError(host, error);
@@ -688,7 +700,7 @@ async function sendQueuedChatMessage(
           {
             outcome: "done",
             sessionStatus: "done",
-            runId: ack.runId,
+            runId: ack.runId ?? runId,
             sessionKey,
             clearLocalRun: true,
             clearChatStream: true,
@@ -700,9 +712,10 @@ async function sendQueuedChatMessage(
         );
         void loadChatHistory(host as unknown as ChatState);
       } else if (isNonTerminalAgentRunStatus(ack.status)) {
+        const resolvedRunId = ack.runId || runId;
         const hasAlreadyAdoptedRunStream =
-          host.chatRunId === ack.runId && typeof host.chatStream === "string";
-        host.chatRunId = ack.runId;
+          host.chatRunId === resolvedRunId && typeof host.chatStream === "string";
+        host.chatRunId = resolvedRunId;
         // Gateway can deliver the first delta before the chat.send ACK resolves.
         // Preserve that adopted stream; resetting here makes first replies vanish
         // until a later delta or final event arrives.
@@ -737,7 +750,7 @@ async function sendQueuedChatMessage(
       if (ack.status === "ok") {
         void refreshChatSessionListForTarget(host, refreshTarget);
       } else if (isNonTerminalAgentRunStatus(ack.status)) {
-        host.refreshSessionsAfterChat.set(ack.runId, refreshTarget);
+        host.refreshSessionsAfterChat.set(ack.runId || runId, refreshTarget);
       }
     }
     discardChatAttachmentDataUrls(excludeComposerAttachments(host, attachments));
@@ -764,6 +777,24 @@ async function sendQueuedChatMessage(
       sendState: "failed",
     }));
     if (isVisibleSession()) {
+      // Drop the optimistic pre-ACK run id so Stop does not stick after a hard fail.
+      if (host.chatRunId === runId) {
+        reconcileChatRunLifecycle(
+          host as unknown as Parameters<typeof reconcileChatRunLifecycle>[0],
+          {
+            outcome: "interrupted",
+            sessionStatus: "failed",
+            runId,
+            sessionKey,
+            clearLocalRun: true,
+            clearChatStream: true,
+            clearToolStream: true,
+            clearSideResultTerminalRuns: true,
+            publishRunStatus: false,
+            armLocalTerminalReconcile: true,
+          },
+        );
+      }
       setChatError(host, error);
       restoreComposerAfterFailedSend(host, opts ?? {});
     }

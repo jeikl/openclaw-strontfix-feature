@@ -938,6 +938,8 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.message.broadcast.enabled": "Enable broadcast action (default: true).",
   "tools.message.actions.allow":
     "Global message action allowlist for the message tool. Use only when the whole runtime should expose and accept a reduced action set; prefer per-agent allowlists for public or sandboxed agents.",
+  "tools.message.deliveryContext":
+    'After a successful message(action=send), append a model-visible and gateway-visible outbound_message record with the full original tool args plus from/to channel identity. "off" (default) keeps legacy delivery-mirror-only behavior (UI may show a compressed mirror; model replay drops it). "target" writes to the outbound peer session; "source" to the requester session; "both" writes both. When target is included, the compressed delivery-mirror for that send is skipped to avoid dual bubbles.',
   "tools.web.search.enabled":
     "Enable managed web_search and optional Codex-native search for eligible models.",
   "tools.web.search.provider":

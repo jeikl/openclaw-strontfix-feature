@@ -86,6 +86,11 @@ import { maybeApplyTtsToMessageActionSendPayload } from "./message-action-tts.js
 import { resolveOutboundMessageGatewayOptions } from "./message-gateway-options.js";
 import type { MessagePollResult, MessageSendResult } from "./message.js";
 import {
+  appendOutboundMessageDeliveryContext,
+  resolveMessageDeliveryContextMode,
+  shouldSkipDeliveryMirrorForSend,
+} from "./outbound-delivery-context.js";
+import {
   applyCrossContextDecoration,
   buildCrossContextDecoration,
   type CrossContextDecoration,
@@ -1197,7 +1202,29 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
       dryRun,
     }),
   });
+  const deliveryContextMode = resolveMessageDeliveryContextMode({ cfg, agentId });
+  const skipDeliveryMirror = !dryRun && shouldSkipDeliveryMirrorForSend(deliveryContextMode);
+
   if (gatewayPluginAction) {
+    if (!dryRun) {
+      await appendOutboundMessageDeliveryContext({
+        cfg,
+        mode: deliveryContextMode,
+        agentId,
+        sourceSessionKey: input.sessionKey,
+        sourceToolContext: input.toolContext,
+        sourceAccountId: input.requesterAccountId ?? accountId,
+        invokerId: input.requesterSenderId,
+        invokerName: input.requesterSenderName ?? input.requesterSenderUsername,
+        targetTo: to,
+        targetChannel: channel,
+        targetAccountId: accountId,
+        targetRoute: outboundRoute,
+        actionParams: params,
+        action,
+        idempotencyKey: normalizeOptionalString(params.idempotencyKey) ?? undefined,
+      });
+    }
     return gatewayPluginAction;
   }
 
@@ -1223,7 +1250,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
       deps: input.deps,
       dryRun,
       mirror:
-        outboundRoute && !dryRun
+        outboundRoute && !dryRun && !skipDeliveryMirror
           ? {
               sessionKey: outboundRoute.sessionKey,
               agentId,
@@ -1250,6 +1277,26 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     replyToId: resolvedReplyToId ?? undefined,
     threadId: resolvedThreadId ?? undefined,
   });
+
+  if (!dryRun) {
+    await appendOutboundMessageDeliveryContext({
+      cfg,
+      mode: deliveryContextMode,
+      agentId,
+      sourceSessionKey: input.sessionKey,
+      sourceToolContext: input.toolContext,
+      sourceAccountId: input.requesterAccountId ?? accountId,
+      invokerId: input.requesterSenderId,
+      invokerName: input.requesterSenderName ?? input.requesterSenderUsername,
+      targetTo: to,
+      targetChannel: channel,
+      targetAccountId: accountId,
+      targetRoute: outboundRoute,
+      actionParams: params,
+      action,
+      idempotencyKey: normalizeOptionalString(params.idempotencyKey) ?? undefined,
+    });
+  }
 
   return {
     kind: "send",

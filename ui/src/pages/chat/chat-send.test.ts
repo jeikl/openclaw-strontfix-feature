@@ -1612,6 +1612,38 @@ describe("handleSendChat", () => {
     expect(phasesAfterAck).toEqual(expect.arrayContaining(["ack"]));
   });
 
+  it("adopts the client run id before chat.send ACK so Stop is available", async () => {
+    const chatSend = createDeferred<{ status: "started"; runId: string }>();
+    const request = vi.fn((method: string) => {
+      if (method === "chat.send") {
+        return chatSend.promise;
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "stop me while sending",
+      requestUpdate: vi.fn(),
+    });
+
+    const send = handleSendChat(host);
+
+    await vi.waitFor(() => {
+      expect(host.chatSending).toBe(true);
+      expect(host.chatRunId).toEqual(expect.any(String));
+      expect(host.chatStream).toBe("");
+    });
+    const preAckRunId = host.chatRunId;
+    expect(hasAbortableSessionRun(host)).toBe(true);
+    expect(host.requestUpdate).toHaveBeenCalled();
+
+    chatSend.resolve({ status: "started", runId: preAckRunId as string });
+    await send;
+
+    expect(host.chatSending).toBe(false);
+    expect(host.chatRunId).toBe(preAckRunId);
+  });
+
   it("waits for an in-flight model picker update before sending chat", async () => {
     const switchUpdate = createDeferred<boolean>();
     const request = vi.fn(async (method: string) => {
@@ -3109,6 +3141,56 @@ describe("handleAbortChat", () => {
     });
     expect(host.chatMessage).toBe("next prompt");
     expect(host.chatRunId).toBe("run-main");
+  });
+
+  it("falls back to session-scoped abort when the runId abort is a no-op", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, aborted: false, runIds: [] })
+      .mockResolvedValueOnce({ ok: true, aborted: true, runIds: ["run-live"] });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatRunId: "run-stale",
+      chatMessage: "next prompt",
+      sessionKey: "agent:main",
+    });
+
+    await handleAbortChat(host, { preserveDraft: true });
+
+    expect(request).toHaveBeenNthCalledWith(1, "chat.abort", {
+      runId: "run-stale",
+      sessionKey: "agent:main",
+    });
+    expect(request).toHaveBeenNthCalledWith(2, "chat.abort", {
+      sessionKey: "agent:main",
+    });
+    expect(host.lastError).toBeNull();
+    expect(host.chatMessage).toBe("next prompt");
+  });
+
+  it("surfaces an error when neither runId nor session abort cancels a run", async () => {
+    const request = vi.fn(async () => ({ ok: true, aborted: false, runIds: [] }));
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatRunId: "run-gone",
+      sessionKey: "agent:main",
+    });
+
+    await handleAbortChat(host);
+
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(host.lastError).toMatch(/Nothing to stop/);
+  });
+
+  it("treats an in-flight send as abortable before chatRunId is observed", () => {
+    const host = makeHost({
+      chatRunId: null,
+      chatSending: true,
+      sessionKey: "agent:main",
+      sessionsResult: createSessionsResult([row("agent:main", { hasActiveRun: false })]),
+    });
+
+    expect(hasAbortableSessionRun(host)).toBe(true);
   });
 
   it("clears typed stop commands after aborting the active run", async () => {

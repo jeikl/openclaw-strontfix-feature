@@ -794,6 +794,11 @@ const MessageToolConfigSchema = z
       })
       .strict()
       .optional(),
+    /**
+     * Append model+gateway-visible outbound_message context after successful
+     * message sends. Default off keeps legacy delivery-mirror-only behavior.
+     */
+    deliveryContext: z.enum(["off", "target", "source", "both"]).optional(),
   })
   .strict()
   .optional();

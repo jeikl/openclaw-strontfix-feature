@@ -899,6 +899,7 @@ type MessageToolOptions = {
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   inboundEventKind?: InboundEventKind;
   requesterSenderId?: string;
+  requesterSenderName?: string;
   senderIsOwner?: boolean;
 };
 
@@ -1495,6 +1496,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
           defaultAccountId: accountId ?? undefined,
           requesterAccountId: agentAccountId,
           requesterSenderId: options?.requesterSenderId,
+          requesterSenderName: options?.requesterSenderName,
           senderIsOwner: options?.senderIsOwner,
           gateway,
           toolContext,
