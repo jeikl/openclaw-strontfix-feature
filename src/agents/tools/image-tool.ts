@@ -8,6 +8,7 @@ import { Type } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MediaUnderstandingModelConfig } from "../../config/types.tools.js";
 import { isPublicHttpUrl } from "../../infra/net/http-url-network.js";
+import { logInfo } from "../../logger.js";
 import {
   DEFAULT_TIMEOUT_SECONDS,
   resolveAutoMediaKeyProviders,
@@ -983,6 +984,16 @@ export function createImageTool(options?: {
         // Dual DNS classification for http(s) URLs: if system DNS or 1.1.1.1/8.8.8.8 resolve to
         // a public IP, prefer direct URL pass-through to vision APIs (avoiding base64 download).
         const isPublicUrl = isHttpUrl ? await isPublicHttpUrl(resolvedImage) : false;
+        if (isHttpUrl) {
+          logInfo(
+            `[image-tool] URL network check: "${resolvedImage}" -> ${
+              isPublicUrl
+                ? "PUBLIC (Mode: Direct URL pass-through)"
+                : "PRIVATE/INTRANET (Mode: Local download + Base64)"
+            }`,
+          );
+        }
+
         if (isPublicUrl) {
           loadedImages.push({
             url: resolvedImage,
@@ -1091,6 +1102,11 @@ export function createImageTool(options?: {
         // Fallback: if direct URL pass-through failed for any image, download image bytes and retry with base64
         const hasUrlOnlyImages = loadedImages.some((img) => img.url && !img.buffer);
         if (hasUrlOnlyImages) {
+          logInfo(
+            `[image-tool] Direct URL vision request failed (${
+              err instanceof Error ? err.message : String(err)
+            }). Triggering fallback: Downloading image locally -> Base64 retry...`,
+          );
           const imageWebMedia = await imageToolProviderDeps.loadImageWebMediaRuntime();
           for (const img of loadedImages) {
             if (img.url && !img.buffer) {
