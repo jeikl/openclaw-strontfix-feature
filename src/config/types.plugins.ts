@@ -1,7 +1,11 @@
 // Defines plugin entry and install configuration types.
 export type PluginEntryConfig = {
   enabled?: boolean;
+  /** Explicit execution priority override for this plugin's hooks (higher values run first). */
+  priority?: number;
   hooks?: {
+    /** Explicit execution priority override for this plugin's hooks. */
+    priority?: number;
     /** Controls prompt mutation via before_prompt_build and prompt fields from legacy before_agent_start. */
     allowPromptInjection?: boolean;
     /**

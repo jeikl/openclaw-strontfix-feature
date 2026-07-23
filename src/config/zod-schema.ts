@@ -273,8 +273,10 @@ const SkillEntrySchema = z
 const PluginEntrySchema = z
   .object({
     enabled: z.boolean().optional(),
+    priority: z.number().optional(),
     hooks: z
       .object({
+        priority: z.number().optional(),
         allowPromptInjection: z.boolean().optional(),
         allowConversationAccess: z.boolean().optional(),
         timeoutMs: z.number().int().positive().max(600_000).optional(),

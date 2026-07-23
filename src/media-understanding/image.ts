@@ -674,6 +674,7 @@ function toImagesDescriptionRequest(params: ImageDescriptionRequest): ImagesDesc
     images: [
       {
         buffer: params.buffer,
+        url: params.url,
         fileName: params.fileName,
         mime: params.mime,
       },

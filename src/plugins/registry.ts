@@ -280,6 +280,7 @@ export type {
 } from "./registry-types.js";
 
 type PluginTypedHookPolicy = {
+  priority?: number;
   allowPromptInjection?: boolean;
   allowConversationAccess?: boolean;
   timeoutMs?: number;
@@ -2613,11 +2614,12 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     }
     const timeoutMs = resolveTypedHookTimeoutMs({ hookName: effectiveHookName, opts, policy });
     record.hookCount += 1;
+    const priority = policy?.priority ?? opts?.priority;
     registry.typedHooks.push({
       pluginId: record.id,
       hookName: effectiveHookName,
       handler: effectiveHandler,
-      priority: opts?.priority,
+      ...(priority !== undefined ? { priority } : {}),
       ...(timeoutMs !== undefined ? { timeoutMs } : {}),
       source: record.source,
     } as TypedPluginHookRegistration);

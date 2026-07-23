@@ -2536,7 +2536,11 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           const api = createApi(record, {
             config: cfg,
             pluginConfig: {},
-            hookPolicy: entry?.hooks,
+            hookPolicy: {
+              ...entry?.hooks,
+              ...(entry?.priority !== undefined ? { priority: entry.priority } : {}),
+              ...(entry?.hooks?.priority !== undefined ? { priority: entry.hooks.priority } : {}),
+            },
             registrationMode,
           });
           let mergedSetupRegistration = setupRegistration;
@@ -2844,7 +2848,11 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       const api = createApi(record, {
         config: cfg,
         pluginConfig: validatedConfig.value,
-        hookPolicy: entry?.hooks,
+        hookPolicy: {
+          ...entry?.hooks,
+          ...(entry?.priority !== undefined ? { priority: entry.priority } : {}),
+          ...(entry?.hooks?.priority !== undefined ? { priority: entry.hooks.priority } : {}),
+        },
         registrationMode,
       });
       const registrySnapshot = snapshotPluginRegistry(registry);

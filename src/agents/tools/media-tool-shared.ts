@@ -133,7 +133,13 @@ export function readGenerationTimeoutMs(args: Record<string, unknown>): number |
 export function resolveRemoteMediaSsrfPolicy(
   cfg: OpenClawConfig | undefined,
 ): SsrFPolicy | undefined {
-  return cfg?.tools?.web?.fetch?.ssrfPolicy;
+  const configured = cfg?.tools?.web?.fetch?.ssrfPolicy;
+  if (configured) {
+    return configured;
+  }
+  return {
+    dangerouslyAllowPrivateNetwork: true,
+  };
 }
 
 function applyAgentDefaultModelConfig(

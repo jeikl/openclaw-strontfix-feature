@@ -7,6 +7,7 @@ import { resolve, isAbsolute } from "node:path";
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MediaUnderstandingModelConfig } from "../../config/types.tools.js";
+import { isPublicHttpUrl } from "../../infra/net/http-url-network.js";
 import {
   DEFAULT_TIMEOUT_SECONDS,
   resolveAutoMediaKeyProviders,
@@ -640,7 +641,7 @@ async function runImagePrompt(params: {
   imageModelConfig: ImageModelConfig;
   modelOverride?: string;
   prompt: string;
-  images: Array<{ buffer: Buffer; mimeType: string }>;
+  images: Array<{ buffer?: Buffer; mimeType?: string; url?: string }>;
   workspaceDir?: string;
 }): Promise<{
   text: string;
@@ -674,7 +675,8 @@ async function runImagePrompt(params: {
           imageProvider?.describeImages ?? imageToolProviderDeps.describeImagesWithModel;
         const described = await describeImages({
           images: params.images.map((image, index) => ({
-            buffer: image.buffer,
+            ...(image.buffer ? { buffer: image.buffer } : {}),
+            ...(image.url ? { url: image.url } : {}),
             fileName: `image-${index + 1}`,
             mime: image.mimeType,
           })),
@@ -695,7 +697,8 @@ async function runImagePrompt(params: {
       if (params.images.length === 1) {
         const image = params.images[0];
         const described = await describeImage({
-          buffer: image.buffer,
+          ...(image.buffer ? { buffer: image.buffer } : {}),
+          ...(image.url ? { url: image.url } : {}),
           fileName: "image-1",
           mime: image.mimeType,
           provider,
@@ -714,7 +717,8 @@ async function runImagePrompt(params: {
       const parts: string[] = [];
       for (const [index, image] of params.images.entries()) {
         const described = await describeImage({
-          buffer: image.buffer,
+          ...(image.buffer ? { buffer: image.buffer } : {}),
+          ...(image.url ? { url: image.url } : {}),
           fileName: `image-${index + 1}`,
           mime: image.mimeType,
           provider,
@@ -910,8 +914,9 @@ export function createImageTool(options?: {
 
       // MARK: - Load and resolve each image
       const loadedImages: Array<{
-        buffer: Buffer;
+        buffer?: Buffer;
         mimeType: string;
+        url?: string;
         resolvedImage: string;
         rewrittenFrom?: string;
       }> = [];
@@ -974,6 +979,19 @@ export function createImageTool(options?: {
           }
           return normalizedRef;
         })();
+
+        // Dual DNS classification for http(s) URLs: if system DNS or 1.1.1.1/8.8.8.8 resolve to
+        // a public IP, prefer direct URL pass-through to vision APIs (avoiding base64 download).
+        const isPublicUrl = isHttpUrl ? await isPublicHttpUrl(resolvedImage) : false;
+        if (isPublicUrl) {
+          loadedImages.push({
+            url: resolvedImage,
+            mimeType: "image/jpeg",
+            resolvedImage,
+          });
+          continue;
+        }
+
         const resolvedPathInfo: { resolved: string; rewrittenFrom?: string } = isDataUrl
           ? { resolved: "" }
           : sandboxConfig
@@ -1053,16 +1071,87 @@ export function createImageTool(options?: {
       }
 
       // MARK: - Run image prompt with all loaded images
-      const result = await runImagePrompt({
-        cfg: options?.config,
-        agentDir,
-        authStore: options?.authProfileStore,
-        imageModelConfig,
-        modelOverride,
-        prompt: promptRaw,
-        images: loadedImages.map((img) => ({ buffer: img.buffer, mimeType: img.mimeType })),
-        workspaceDir: options?.workspaceDir,
-      });
+      let result: Awaited<ReturnType<typeof runImagePrompt>>;
+      try {
+        result = await runImagePrompt({
+          cfg: options?.config,
+          agentDir,
+          authStore: options?.authProfileStore,
+          imageModelConfig,
+          modelOverride,
+          prompt: promptRaw,
+          images: loadedImages.map((img) => ({
+            ...(img.buffer ? { buffer: img.buffer } : {}),
+            ...(img.url ? { url: img.url } : {}),
+            mimeType: img.mimeType,
+          })),
+          workspaceDir: options?.workspaceDir,
+        });
+      } catch (err) {
+        // Fallback: if direct URL pass-through failed for any image, download image bytes and retry with base64
+        const hasUrlOnlyImages = loadedImages.some((img) => img.url && !img.buffer);
+        if (hasUrlOnlyImages) {
+          const imageWebMedia = await imageToolProviderDeps.loadImageWebMediaRuntime();
+          for (const img of loadedImages) {
+            if (img.url && !img.buffer) {
+              try {
+                const fallbackMedia = await imageWebMedia.loadWebMedia(img.url, {
+                  maxBytes,
+                  localRoots: resolveMediaToolLocalRoots(
+                    options?.workspaceDir,
+                    {
+                      workspaceOnly: options?.fsPolicy?.workspaceOnly === true,
+                      cfg: options?.config,
+                      channelId: options?.agentChannel ?? options?.currentChannelId,
+                      accountId: options?.agentAccountId,
+                    },
+                    [img.url],
+                  ),
+                  inboundRoots: resolveMediaToolInboundRoots({
+                    workspaceOnly: options?.fsPolicy?.workspaceOnly === true,
+                    cfg: options?.config,
+                    channelId: options?.agentChannel ?? options?.currentChannelId,
+                    accountId: options?.agentAccountId,
+                  }),
+                  ssrfPolicy: remoteMediaSsrfPolicy,
+                  readIdleTimeoutMs: REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS,
+                  imageCompression,
+                });
+                if (fallbackMedia.kind === "image") {
+                  img.buffer = fallbackMedia.buffer;
+                  const contentType =
+                    "contentType" in fallbackMedia && typeof fallbackMedia.contentType === "string"
+                      ? fallbackMedia.contentType
+                      : undefined;
+                  const legacyMimeType =
+                    "mimeType" in fallbackMedia && typeof fallbackMedia.mimeType === "string"
+                      ? fallbackMedia.mimeType
+                      : undefined;
+                  img.mimeType = contentType ?? legacyMimeType ?? "image/jpeg";
+                }
+              } catch {
+                /* continue retry with best effort */
+              }
+            }
+          }
+          result = await runImagePrompt({
+            cfg: options?.config,
+            agentDir,
+            authStore: options?.authProfileStore,
+            imageModelConfig,
+            modelOverride,
+            prompt: promptRaw,
+            images: loadedImages.map((img) => ({
+              ...(img.buffer ? { buffer: img.buffer } : {}),
+              ...(img.url ? { url: img.url } : {}),
+              mimeType: img.mimeType,
+            })),
+            workspaceDir: options?.workspaceDir,
+          });
+        } else {
+          throw err;
+        }
+      }
 
       const imageDetails =
         loadedImages.length === 1
