@@ -135,7 +135,10 @@ export type VideoDescriptionResult = {
 };
 
 export type ImageDescriptionRequest = {
-  buffer: Buffer;
+  /** Local/decoded bytes; optional when `url` is a public http(s) image URL. */
+  buffer?: Buffer;
+  /** Prefer pass-through public http(s) URL to vision APIs (OpenAI image_url / Anthropic url). */
+  url?: string;
   fileName: string;
   mime?: string;
   prompt?: string;
@@ -152,7 +155,10 @@ export type ImageDescriptionRequest = {
 };
 
 export type ImagesDescriptionInput = {
-  buffer: Buffer;
+  /** Local/decoded bytes; optional when `url` is set. */
+  buffer?: Buffer;
+  /** Public http(s) URL preferred for OpenAI/Anthropic-compatible vision endpoints. */
+  url?: string;
   fileName: string;
   mime?: string;
 };

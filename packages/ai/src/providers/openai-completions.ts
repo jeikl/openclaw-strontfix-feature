@@ -1067,10 +1067,23 @@ export function convertMessages(
                 text: sanitizeSurrogates(item.text),
               } satisfies ChatCompletionContentPartText;
             }
+            // Prefer remote http(s) URL when present (avoids base64 download round-trip).
+            const imageUrl =
+              typeof item.url === "string" && /^https?:\/\//i.test(item.url.trim())
+                ? item.url.trim()
+                : item.data
+                  ? `data:${item.mimeType};base64,${item.data}`
+                  : "";
+            if (!imageUrl) {
+              return {
+                type: "text",
+                text: "[image missing data/url]",
+              } satisfies ChatCompletionContentPartText;
+            }
             return {
               type: "image_url",
               image_url: {
-                url: `data:${item.mimeType};base64,${item.data}`,
+                url: imageUrl,
               },
             } satisfies ChatCompletionContentPartImage;
           },
@@ -1222,12 +1235,20 @@ export function convertMessages(
         if (hasImages && model.input.includes("image")) {
           for (const block of toolMsg.content) {
             if (isImageContentBlock(block)) {
-              imageBlocks.push({
-                type: "image_url",
-                image_url: {
-                  url: `data:${block.mimeType};base64,${block.data}`,
-                },
-              });
+              const imageUrl =
+                typeof block.url === "string" && /^https?:\/\//i.test(block.url.trim())
+                  ? block.url.trim()
+                  : block.data
+                    ? `data:${block.mimeType};base64,${block.data}`
+                    : "";
+              if (imageUrl) {
+                imageBlocks.push({
+                  type: "image_url",
+                  image_url: {
+                    url: imageUrl,
+                  },
+                });
+              }
             }
           }
         }

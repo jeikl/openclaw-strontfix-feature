@@ -240,10 +240,18 @@ export interface ThinkingContent {
   redacted?: boolean;
 }
 
-/** Base64 image content block with MIME type metadata. */
+/**
+ * Image content block for multimodal requests.
+ * Prefer `url` (http/https) when the model endpoint can fetch it (OpenAI image_url /
+ * Anthropic source.url); otherwise send base64 `data`.
+ * At least one of `data` or `url` must be set.
+ */
 export interface ImageContent {
   type: "image";
-  data: string; // base64 encoded image data
+  /** Base64 encoded image bytes (no data: prefix). Optional when `url` is set. */
+  data?: string;
+  /** Public http(s) URL the provider should fetch. Optional when `data` is set. */
+  url?: string;
   mimeType: string; // e.g., "image/jpeg", "image/png"
 }
 

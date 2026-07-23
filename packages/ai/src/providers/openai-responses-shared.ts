@@ -321,10 +321,16 @@ export function convertResponsesMessages<TApi extends Api>(
               text: sanitizeSurrogates(item.text),
             } satisfies ResponseInputText;
           }
+          const imageUrl =
+            typeof item.url === "string" && /^https?:\/\//i.test(item.url.trim())
+              ? item.url.trim()
+              : item.data
+                ? `data:${item.mimeType};base64,${item.data}`
+                : "";
           return {
             type: "input_image",
             detail: "auto",
-            image_url: `data:${item.mimeType};base64,${item.data}`,
+            image_url: imageUrl || `data:${item.mimeType || "image/png"};base64,`,
           } satisfies ResponseInputImage;
         });
         if (content.length === 0) {

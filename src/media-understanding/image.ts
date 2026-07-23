@@ -278,14 +278,23 @@ async function prepareResolvedImageRuntime(
 
 function buildImageContext(
   prompt: string,
-  images: Array<{ buffer: Buffer; mime?: string }>,
+  images: Array<{ buffer?: Buffer; mime?: string; url?: string }>,
   opts?: { promptInUserContent?: boolean },
 ): Context {
-  const imageContent = images.map((image) => ({
-    type: "image" as const,
-    data: image.buffer.toString("base64"),
-    mimeType: image.mime ?? "image/jpeg",
-  }));
+  const imageContent = images.map((image) => {
+    const mimeType = image.mime ?? "image/jpeg";
+    const url =
+      typeof image.url === "string" && /^https?:\/\//i.test(image.url.trim())
+        ? image.url.trim()
+        : undefined;
+    const data = image.buffer ? image.buffer.toString("base64") : undefined;
+    return {
+      type: "image" as const,
+      mimeType,
+      ...(url ? { url } : {}),
+      ...(data ? { data } : {}),
+    };
+  });
   const content = opts?.promptInUserContent
     ? [{ type: "text" as const, text: prompt }, ...imageContent]
     : imageContent;
@@ -300,6 +309,41 @@ function buildImageContext(
       },
     ],
   };
+}
+
+/** True when the model API can accept remote image URLs (not only base64). */
+export function modelSupportsRemoteImageUrl(model: {
+  api?: string;
+  provider?: string;
+  input?: readonly string[];
+}): boolean {
+  if (model.input && !model.input.includes("image")) {
+    return false;
+  }
+  const api = String(model.api || "").toLowerCase();
+  // OpenAI Chat Completions / Responses style + Anthropic Messages
+  if (
+    api.includes("openai-completions") ||
+    api.includes("openai-responses") ||
+    api === "openai" ||
+    api.includes("anthropic")
+  ) {
+    return true;
+  }
+  const provider = String(model.provider || "").toLowerCase();
+  if (
+    provider === "openai" ||
+    provider === "anthropic" ||
+    provider === "openrouter" ||
+    provider.includes("anthropic")
+  ) {
+    return true;
+  }
+  // Custom OpenAI-compatible gateways (e.g. newapi with api: openai-completions)
+  if (api.includes("completion") || api.includes("chat")) {
+    return true;
+  }
+  return false;
 }
 
 function shouldPlaceImagePromptInUserContent(model: Model): boolean {

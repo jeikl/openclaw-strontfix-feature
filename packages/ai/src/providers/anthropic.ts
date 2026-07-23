@@ -1471,12 +1471,22 @@ function convertMessages(
               text: sanitizeSurrogates(item.text),
             };
           }
+          // Prefer remote URL when present (Anthropic source.type = "url"); else base64.
+          if (typeof item.url === "string" && /^https?:\/\//i.test(item.url.trim())) {
+            return {
+              type: "image",
+              source: {
+                type: "url",
+                url: item.url.trim(),
+              },
+            };
+          }
           return {
             type: "image",
             source: {
               type: "base64",
               media_type: item.mimeType as "image/jpeg" | "image/png" | "image/gif" | "image/webp",
-              data: item.data,
+              data: item.data ?? "",
             },
           };
         });
