@@ -555,28 +555,52 @@ function assistantHasToolCalls(message: AgentMessage): boolean {
 }
 
 function collectLaterMatchingToolResults(params: {
-  messages: AgentMessage[];
   startIndex: number;
   toolCalls: Array<{ id: string; name?: string }>;
   toolNamesById: Map<string, string>;
   seenToolResultIds: Set<string>;
+  explicitToolResultsById: Map<
+    string,
+    Array<{ msg: Extract<AgentMessage, { role: "toolResult" }>; index: number }>
+  >;
+  legacyToolResults: Array<{ msg: Extract<AgentMessage, { role: "toolResult" }>; index: number }>;
 }): Map<string, Extract<AgentMessage, { role: "toolResult" }>> {
   const resultsById = new Map<string, Extract<AgentMessage, { role: "toolResult" }>>();
-  const toolCallIds = new Set(params.toolCalls.map((toolCall) => toolCall.id));
-  for (let index = params.startIndex; index < params.messages.length; index += 1) {
-    const candidate = params.messages[index];
-    if (!candidate || typeof candidate !== "object" || candidate.role !== "toolResult") {
+  for (const call of params.toolCalls) {
+    if (params.seenToolResultIds.has(call.id) || resultsById.has(call.id)) {
       continue;
     }
-    const normalizedLegacyResult = normalizeLegacyToolResultId(candidate, params.toolCalls);
-    const id = extractToolResultId(normalizedLegacyResult);
-    if (!id || !toolCallIds.has(id) || params.seenToolResultIds.has(id) || resultsById.has(id)) {
-      continue;
+    const explicitCandidates = params.explicitToolResultsById.get(call.id);
+    if (explicitCandidates) {
+      const match = explicitCandidates.find((c) => c.index >= params.startIndex);
+      if (match) {
+        resultsById.set(
+          call.id,
+          normalizeToolResultName(match.msg, params.toolNamesById.get(call.id)),
+        );
+        continue;
+      }
     }
-    resultsById.set(
-      id,
-      normalizeToolResultName(normalizedLegacyResult, params.toolNamesById.get(id)),
-    );
+    if (params.toolCalls.length === 1) {
+      const legacyMatch = params.legacyToolResults.find((c) => {
+        if (c.index < params.startIndex) {
+          return false;
+        }
+        const normalized = normalizeLegacyToolResultId(c.msg, params.toolCalls);
+        const id = extractToolResultId(normalized);
+        return id && !params.seenToolResultIds.has(id);
+      });
+      if (legacyMatch) {
+        const normalized = normalizeLegacyToolResultId(legacyMatch.msg, params.toolCalls);
+        const id = extractToolResultId(normalized);
+        if (id === call.id) {
+          resultsById.set(
+            call.id,
+            normalizeToolResultName(normalized, params.toolNamesById.get(call.id)),
+          );
+        }
+      }
+    }
   }
   return resultsById;
 }
@@ -591,6 +615,33 @@ export function repairToolUseResultPairing(
   // - moving matching toolResult messages directly after their assistant toolCall turn
   // - inserting synthetic error toolResults for missing ids
   // - dropping duplicate toolResults for the same id (anywhere in the transcript)
+  const explicitToolResultsById = new Map<
+    string,
+    Array<{ msg: Extract<AgentMessage, { role: "toolResult" }>; index: number }>
+  >();
+  const legacyToolResults: Array<{
+    msg: Extract<AgentMessage, { role: "toolResult" }>;
+    index: number;
+  }> = [];
+
+  for (let idx = 0; idx < messages.length; idx += 1) {
+    const msg = messages[idx];
+    if (msg && typeof msg === "object" && (msg as { role?: unknown }).role === "toolResult") {
+      const toolResult = msg as Extract<AgentMessage, { role: "toolResult" }>;
+      const id = extractToolResultId(toolResult);
+      if (id) {
+        let arr = explicitToolResultsById.get(id);
+        if (!arr) {
+          arr = [];
+          explicitToolResultsById.set(id, arr);
+        }
+        arr.push({ msg: toolResult, index: idx });
+      } else {
+        legacyToolResults.push({ msg: toolResult, index: idx });
+      }
+    }
+  }
+
   const out: AgentMessage[] = [];
   const added: Array<Extract<AgentMessage, { role: "toolResult" }>> = [];
   const seenToolResultIds = new Set<string>();
@@ -774,11 +825,12 @@ export function repairToolUseResultPairing(
     }
 
     const laterResultsById = collectLaterMatchingToolResults({
-      messages,
       startIndex: j,
       toolCalls,
       toolNamesById: toolCallNamesById,
       seenToolResultIds,
+      explicitToolResultsById,
+      legacyToolResults,
     });
     for (const call of toolCalls) {
       const existing = spanResultsById.get(call.id);
