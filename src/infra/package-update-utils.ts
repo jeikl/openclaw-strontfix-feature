@@ -59,12 +59,15 @@ export function readInstalledPackagePeerDependencies(dir: string): Record<string
 /** Return true when an installed package needs an openclaw peer link repair. */
 export function installedPackageNeedsOpenClawPeerLinkRepair(dir: string): boolean {
   const peerDependencies = readInstalledPackagePeerDependencies(dir);
-  if (!Object.hasOwn(peerDependencies, "openclaw")) {
+  const needsOpenClaw = Object.hasOwn(peerDependencies, "openclaw");
+  const needsJeikClaw = Object.hasOwn(peerDependencies, "jeikclaw");
+  if (!needsOpenClaw && !needsJeikClaw) {
     return false;
   }
 
   try {
-    fsSync.statSync(path.join(dir, "node_modules", "openclaw"));
+    if (needsOpenClaw) fsSync.statSync(path.join(dir, "node_modules", "openclaw"));
+    if (needsJeikClaw) fsSync.statSync(path.join(dir, "node_modules", "jeikclaw"));
     return false;
   } catch (error) {
     const code = (error as NodeJS.ErrnoException | undefined)?.code;

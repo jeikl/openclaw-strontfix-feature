@@ -227,7 +227,7 @@ export function resolveAcpClientSpawnInvocation(
     platform: runtime.platform,
     env: runtime.env,
     execPath: runtime.execPath,
-    packageName: "openclaw",
+    packageName: "jeikclaw",
   });
   const resolved = materializeWindowsSpawnProgram(program, params.serverArgs);
   return {

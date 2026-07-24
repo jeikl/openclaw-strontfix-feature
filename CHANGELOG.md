@@ -1,6 +1,10 @@
-﻿# Changelog
+# Changelog
 
 Docs: https://docs.openclaw.ai
+
+## 2026.7.24-5
+
+- **Infra:** comprehensively support `jeikclaw` production compatibility and execution guards.
 
 ## 2026.7.1
 

@@ -206,9 +206,13 @@ function resolveLoaderPackageRootFromModulePath(modulePath: string): string {
         };
         if (
           packageJson.name === "openclaw" ||
+          packageJson.name === "jeikclaw" ||
           (typeof packageJson.bin === "object" &&
             packageJson.bin !== null &&
-            typeof (packageJson.bin as { openclaw?: unknown }).openclaw === "string")
+            (typeof (packageJson.bin as { openclaw?: unknown; jeikclaw?: unknown }).openclaw ===
+              "string" ||
+              typeof (packageJson.bin as { openclaw?: unknown; jeikclaw?: unknown }).jeikclaw ===
+                "string"))
         ) {
           return cursor;
         }

@@ -10,7 +10,7 @@
   "devDependencies": {
     "@openclaw/matrix": "workspace:*",
     "@openclaw/plugin-sdk": "workspace:*",
-    "openclaw": "workspace:*"
+    "jeikclaw": "workspace:*"
   },
   "peerDependencies": {
     "openclaw": ">=2026.7.1"

@@ -1252,8 +1252,9 @@ function textMentionsSecurityAuditSuppressions(value: string): boolean {
 
 function isReadOnlySecurityAuditSuppressionInspection(argv: string[]): boolean {
   const command = normalizeCommandName(argv[0]);
-  let offset = command === "pnpm" && argv[1] === "openclaw" ? 1 : 0;
-  if (normalizeCommandName(argv[offset]) !== "openclaw") {
+  let offset = command === "pnpm" && (argv[1] === "openclaw" || argv[1] === "jeikclaw") ? 1 : 0;
+  const normalizedCmd = normalizeCommandName(argv[offset]);
+  if (normalizedCmd !== "openclaw" && normalizedCmd !== "jeikclaw") {
     return false;
   }
   offset += 1;

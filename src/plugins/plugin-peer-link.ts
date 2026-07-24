@@ -117,6 +117,7 @@ async function auditOpenClawPeerDependency(params: {
   packageDir: string;
   npmRoot?: string;
   packageName?: string;
+  peerName?: string;
 }): Promise<OpenClawPeerLinkAuditIssue | null> {
   const packageName =
     params.packageName ??
@@ -141,13 +142,13 @@ async function auditOpenClawPeerDependency(params: {
       return {
         packageName,
         packageDir: params.packageDir,
-        reason: `missing ${path.join(nodeModulesDir, "openclaw")}`,
+        reason: `missing ${path.join(nodeModulesDir, params.peerName ?? "openclaw")}`,
       };
     }
     throw error;
   }
 
-  const linkPath = path.join(nodeModulesDir, "openclaw");
+  const linkPath = path.join(nodeModulesDir, params.peerName ?? "openclaw");
   const currentTarget = await safeRealpath(linkPath);
   if (!currentTarget) {
     return {
@@ -170,6 +171,7 @@ async function auditOpenClawPeerDependency(params: {
 export async function auditOpenClawPeerDependencyLink(params: {
   packageDir: string;
   packageName?: string;
+  peerName?: string;
 }): Promise<OpenClawPeerLinkAuditIssue | null> {
   const packageName = params.packageName ?? path.basename(params.packageDir);
   const hostRoot = resolveOpenClawPackageRootSync({
@@ -188,6 +190,7 @@ export async function auditOpenClawPeerDependencyLink(params: {
     hostRoot,
     packageDir: params.packageDir,
     packageName,
+    peerName: params.peerName,
   });
 }
 
@@ -252,9 +255,12 @@ async function linkOpenClawPeerDependency(params: {
     });
     if (existing) {
       if (!existing.isSymbolicLink()) {
-        if (params.peerName === "openclaw" && existing.isDirectory()) {
+        if (
+          (params.peerName === "openclaw" || params.peerName === "jeikclaw") &&
+          existing.isDirectory()
+        ) {
           const existingPackageName = await readPackageName(linkPath);
-          if (existingPackageName === "openclaw") {
+          if (existingPackageName === "openclaw" || existingPackageName === "jeikclaw") {
             await fs.rm(linkPath, { recursive: true, force: true });
             await fs.symlink(params.hostRoot, linkPath, "junction");
             params.logger.info?.(
@@ -302,7 +308,9 @@ export async function linkOpenClawPeerDependencies(params: {
   peerDependencies: Record<string, string>;
   logger: PluginPeerLinkLogger;
 }): Promise<{ repaired: number; skipped: number }> {
-  const peers = Object.keys(params.peerDependencies).filter((name) => name === "openclaw");
+  const peers = Object.keys(params.peerDependencies).filter(
+    (name) => name === "openclaw" || name === "jeikclaw",
+  );
   if (peers.length === 0) {
     return { repaired: 0, skipped: 0 };
   }
@@ -347,7 +355,10 @@ export async function relinkOpenClawPeerDependenciesInManagedNpmRoot(params: {
   let skipped = 0;
   for (const packageDir of await listManagedNpmRootPackageDirs(params.npmRoot)) {
     const peerDependencies = await readPackagePeerDependencies(packageDir);
-    if (!Object.hasOwn(peerDependencies, "openclaw")) {
+    if (
+      !Object.hasOwn(peerDependencies, "openclaw") &&
+      !Object.hasOwn(peerDependencies, "jeikclaw")
+    ) {
       continue;
     }
     checked += 1;
@@ -379,7 +390,10 @@ export async function auditOpenClawPeerDependenciesInManagedNpmRoot(params: {
   const issues: OpenClawPeerLinkAuditIssue[] = [];
   for (const packageDir of await listManagedNpmRootPackageDirs(params.npmRoot)) {
     const peerDependencies = await readPackagePeerDependencies(packageDir);
-    if (!Object.hasOwn(peerDependencies, "openclaw")) {
+    if (
+      !Object.hasOwn(peerDependencies, "openclaw") &&
+      !Object.hasOwn(peerDependencies, "jeikclaw")
+    ) {
       continue;
     }
     checked += 1;
@@ -387,6 +401,7 @@ export async function auditOpenClawPeerDependenciesInManagedNpmRoot(params: {
       hostRoot,
       npmRoot: params.npmRoot,
       packageDir,
+      peerName: Object.hasOwn(peerDependencies, "jeikclaw") ? "jeikclaw" : "openclaw",
     });
     if (issue) {
       issues.push(issue);

@@ -90,7 +90,7 @@ function isSafePackageName(name: string): boolean {
 }
 
 function isManagedNpmRootHostPeerPackageName(name: string): boolean {
-  return name === "openclaw";
+  return name === "openclaw" || name === "jeikclaw";
 }
 
 function readOverrideRecord(value: unknown): Record<string, unknown> {
@@ -641,7 +641,10 @@ function scrubHostPeerFromLockPackage(value: unknown): boolean {
     return false;
   }
   let changed = false;
-  if (isRecord(value.peerDependencies) && "openclaw" in value.peerDependencies) {
+  if (
+    isRecord(value.peerDependencies) &&
+    ("openclaw" in value.peerDependencies || "jeikclaw" in value.peerDependencies)
+  ) {
     const peerDependencies = { ...value.peerDependencies };
     delete peerDependencies.openclaw;
     if (Object.keys(peerDependencies).length > 0) {
@@ -651,7 +654,10 @@ function scrubHostPeerFromLockPackage(value: unknown): boolean {
     }
     changed = true;
   }
-  if (isRecord(value.peerDependenciesMeta) && "openclaw" in value.peerDependenciesMeta) {
+  if (
+    isRecord(value.peerDependenciesMeta) &&
+    ("openclaw" in value.peerDependenciesMeta || "jeikclaw" in value.peerDependenciesMeta)
+  ) {
     const peerDependenciesMeta = { ...value.peerDependenciesMeta };
     delete peerDependenciesMeta.openclaw;
     if (Object.keys(peerDependenciesMeta).length > 0) {
@@ -977,9 +983,11 @@ export async function repairManagedNpmRootOpenClawPeer(params: {
   const manifestPath = path.join(params.npmRoot, "package.json");
   const manifest = await readManagedNpmRootManifest(manifestPath);
   const dependencies = readDependencyRecord(manifest.dependencies);
-  const hasManifestDependency = "openclaw" in dependencies;
+  const hasManifestDependency = "openclaw" in dependencies || "jeikclaw" in dependencies;
   const hasLockDependency = await managedNpmRootLockfileHasOpenClawPeer(params.npmRoot);
-  const hasPackageDir = await pathExists(path.join(params.npmRoot, "node_modules", "openclaw"));
+  const hasPackageDir =
+    (await pathExists(path.join(params.npmRoot, "node_modules", "openclaw"))) ||
+    (await pathExists(path.join(params.npmRoot, "node_modules", "jeikclaw")));
   const preserveActiveHostLink = activeHostState === "linked-active-host";
   if (!hasManifestDependency && !hasLockDependency && (!hasPackageDir || preserveActiveHostLink)) {
     return false;
@@ -1004,6 +1012,7 @@ export async function repairManagedNpmRootOpenClawPeer(params: {
         "--no-audit",
         "--no-fund",
         "openclaw",
+        "jeikclaw",
       ]
     : [
         "npm",
@@ -1056,7 +1065,11 @@ async function readManagedNpmRootOpenClawHostState(params: {
     return "none";
   }
 
-  const managedOpenClawPackageDir = path.join(params.npmRoot, "node_modules", "openclaw");
+  // We'll check both openclaw and jeikclaw if one is not found
+  let managedOpenClawPackageDir = path.join(params.npmRoot, "node_modules", "jeikclaw");
+  if (!(await pathExists(managedOpenClawPackageDir))) {
+    managedOpenClawPackageDir = path.join(params.npmRoot, "node_modules", "openclaw");
+  }
   const [hostPackageRoot, managedPackageRoot, managedPackageStat] = await Promise.all([
     realpathIfExists(packageRoot),
     realpathIfExists(managedOpenClawPackageDir),
@@ -1077,7 +1090,7 @@ async function managedNpmRootLockfileHasOpenClawPeer(npmRoot: string): Promise<b
       if (
         isRecord(rootPackage) &&
         isRecord(rootPackage.dependencies) &&
-        "openclaw" in rootPackage.dependencies
+        ("openclaw" in rootPackage.dependencies || "jeikclaw" in rootPackage.dependencies)
       ) {
         return true;
       }
@@ -1085,7 +1098,10 @@ async function managedNpmRootLockfileHasOpenClawPeer(npmRoot: string): Promise<b
         return true;
       }
     }
-    return isRecord(parsed.dependencies) && "openclaw" in parsed.dependencies;
+    return (
+      isRecord(parsed.dependencies) &&
+      ("openclaw" in parsed.dependencies || "jeikclaw" in parsed.dependencies)
+    );
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") {
       return false;
@@ -1135,11 +1151,19 @@ async function scrubManagedNpmRootOpenClawPeer(params: {
   const manifestPath = path.join(params.npmRoot, "package.json");
   const manifest = await readManagedNpmRootManifest(manifestPath);
   const dependencies = readDependencyRecord(manifest.dependencies);
+  let modified = false;
   if ("openclaw" in dependencies) {
-    const { openclaw: _removed, ...nextDependencies } = dependencies;
+    delete dependencies["openclaw"];
+    modified = true;
+  }
+  if ("jeikclaw" in dependencies) {
+    delete dependencies["jeikclaw"];
+    modified = true;
+  }
+  if (modified) {
     await fs.writeFile(
       manifestPath,
-      `${JSON.stringify({ ...manifest, private: true, dependencies: nextDependencies }, null, 2)}\n`,
+      `${JSON.stringify({ ...manifest, private: true, dependencies }, null, 2)}\n`,
       "utf8",
     );
   }
@@ -1154,20 +1178,34 @@ async function scrubManagedNpmRootOpenClawPeer(params: {
         const dependenciesValue = { ...rootPackage.dependencies };
         if ("openclaw" in dependenciesValue) {
           delete dependenciesValue.openclaw;
-          parsed.packages[""] = { ...rootPackage, dependencies: dependenciesValue };
           lockChanged = true;
+        }
+        if ("jeikclaw" in dependenciesValue) {
+          delete dependenciesValue.jeikclaw;
+          lockChanged = true;
+        }
+        if (lockChanged) {
+          parsed.packages[""] = { ...rootPackage, dependencies: dependenciesValue };
         }
       }
       if ("node_modules/openclaw" in parsed.packages) {
         delete parsed.packages["node_modules/openclaw"];
         lockChanged = true;
       }
+      if ("node_modules/jeikclaw" in parsed.packages) {
+        delete parsed.packages["node_modules/jeikclaw"];
+        lockChanged = true;
+      }
     }
-    if (isRecord(parsed.dependencies) && "openclaw" in parsed.dependencies) {
-      const dependenciesLocal = { ...parsed.dependencies };
-      delete dependenciesLocal.openclaw;
-      parsed.dependencies = dependenciesLocal;
-      lockChanged = true;
+    if (isRecord(parsed.dependencies)) {
+      if ("openclaw" in parsed.dependencies) {
+        delete parsed.dependencies.openclaw;
+        lockChanged = true;
+      }
+      if ("jeikclaw" in parsed.dependencies) {
+        delete parsed.dependencies.jeikclaw;
+        lockChanged = true;
+      }
     }
     if (lockChanged) {
       await fs.writeFile(lockPath, `${JSON.stringify(parsed, null, 2)}\n`, "utf8");
@@ -1179,13 +1217,17 @@ async function scrubManagedNpmRootOpenClawPeer(params: {
   }
 
   const openclawPackageDir = path.join(params.npmRoot, "node_modules", "openclaw");
-  if (!params.preservePackageDir && (await pathExists(openclawPackageDir))) {
-    await fs.rm(openclawPackageDir, { recursive: true, force: true });
+  const jeikclawPackageDir = path.join(params.npmRoot, "node_modules", "jeikclaw");
+  if (!params.preservePackageDir) {
+    if (await pathExists(openclawPackageDir))
+      await fs.rm(openclawPackageDir, { recursive: true, force: true });
+    if (await pathExists(jeikclawPackageDir))
+      await fs.rm(jeikclawPackageDir, { recursive: true, force: true });
   }
   const binDir = path.join(params.npmRoot, "node_modules", ".bin");
   await Promise.all(
-    ["openclaw", "openclaw.cmd", "openclaw.ps1"].map((binName) =>
-      fs.rm(path.join(binDir, binName), { force: true }),
+    ["openclaw", "openclaw.cmd", "openclaw.ps1", "jeikclaw", "jeikclaw.cmd", "jeikclaw.ps1"].map(
+      (binName) => fs.rm(path.join(binDir, binName), { force: true }),
     ),
   );
   await fs.rm(path.join(params.npmRoot, "node_modules", ".package-lock.json"), {

@@ -68,7 +68,7 @@ if (
     installRoot,
   });
   if (!waitingForCompileCacheRespawn) {
-    process.title = "openclaw";
+    process.title = "jeikclaw";
     ensureOpenClawExecMarkerOnProcess();
     installProcessWarningFilter();
     normalizeEnv();

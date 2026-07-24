@@ -20,7 +20,7 @@
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",
-    "openclaw": "workspace:*"
+    "jeikclaw": "workspace:*"
   },
   "openclaw": {
     "extensions": [

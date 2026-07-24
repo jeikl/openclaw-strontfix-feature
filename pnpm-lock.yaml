@@ -83,8 +83,8 @@ importers:
         specifier: 0.6.0
         version: 0.6.0
       '@openclaw/ai':
-        specifier: workspace:*
-        version: link:packages/ai
+        specifier: 2026.7.1-2
+        version: 2026.7.1-2(@aws-sdk/credential-provider-node@3.972.61)(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))(@opentelemetry/api@1.9.1)(@smithy/hash-node@4.4.5)(@smithy/signature-v4@5.6.1)(ws@8.21.0)(zod@4.4.3)
       '@openclaw/fs-safe':
         specifier: 0.4.1
         version: 0.4.1(patch_hash=e49004277fcb3e714125baf15a996682c7310e8e9269c865cc5bcb9fef46a57c)
@@ -508,6 +508,9 @@ importers:
 
   extensions/clickclack:
     dependencies:
+      openclaw:
+        specifier: '>=2026.7.1'
+        version: 2026.7.1(@aws-sdk/credential-provider-node@3.972.61)(@opentelemetry/api@1.9.1)(@smithy/hash-node@4.4.5)(@smithy/signature-v4@5.6.1)
       ws:
         specifier: 8.21.0
         version: 8.21.0
@@ -518,7 +521,7 @@ importers:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
-      openclaw:
+      jeikclaw:
         specifier: workspace:*
         version: link:../..
 
@@ -700,6 +703,9 @@ importers:
       libopus-wasm:
         specifier: 0.2.0
         version: 0.2.0
+      openclaw:
+        specifier: '>=2026.7.1'
+        version: 2026.7.1(@aws-sdk/credential-provider-node@3.972.61)(@opentelemetry/api@1.9.1)(@smithy/hash-node@4.4.5)(@smithy/signature-v4@5.6.1)
       typebox:
         specifier: 1.3.3
         version: 1.3.3
@@ -713,7 +719,7 @@ importers:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
-      openclaw:
+      jeikclaw:
         specifier: workspace:*
         version: link:../..
 
@@ -762,6 +768,9 @@ importers:
       '@larksuiteoapi/node-sdk':
         specifier: 1.68.0
         version: 1.68.0
+      openclaw:
+        specifier: '>=2026.7.1'
+        version: 2026.7.1(@aws-sdk/credential-provider-node@3.972.61)(@opentelemetry/api@1.9.1)(@smithy/hash-node@4.4.5)(@smithy/signature-v4@5.6.1)
       typebox:
         specifier: 1.3.3
         version: 1.3.3
@@ -772,7 +781,7 @@ importers:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
-      openclaw:
+      jeikclaw:
         specifier: workspace:*
         version: link:../..
 
@@ -839,6 +848,9 @@ importers:
       commander:
         specifier: 15.0.0
         version: 15.0.0
+      openclaw:
+        specifier: '>=2026.7.1'
+        version: 2026.7.1(@aws-sdk/credential-provider-node@3.972.61)(@opentelemetry/api@1.9.1)(@smithy/hash-node@4.4.5)(@smithy/signature-v4@5.6.1)
       typebox:
         specifier: 1.3.3
         version: 1.3.3
@@ -846,7 +858,7 @@ importers:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
-      openclaw:
+      jeikclaw:
         specifier: workspace:*
         version: link:../..
 
@@ -858,6 +870,9 @@ importers:
       google-auth-library:
         specifier: 10.9.0
         version: 10.9.0
+      openclaw:
+        specifier: '>=2026.7.1'
+        version: 2026.7.1(@aws-sdk/credential-provider-node@3.972.61)(@opentelemetry/api@1.9.1)(@smithy/hash-node@4.4.5)(@smithy/signature-v4@5.6.1)
       zod:
         specifier: 4.4.3
         version: 4.4.3
@@ -865,7 +880,7 @@ importers:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
-      openclaw:
+      jeikclaw:
         specifier: workspace:*
         version: link:../..
 
@@ -936,6 +951,9 @@ importers:
       '@line/bot-sdk':
         specifier: 11.1.0
         version: 11.1.0
+      openclaw:
+        specifier: '>=2026.7.1'
+        version: 2026.7.1(@aws-sdk/credential-provider-node@3.972.61)(@opentelemetry/api@1.9.1)(@smithy/hash-node@4.4.5)(@smithy/signature-v4@5.6.1)
       zod:
         specifier: 4.4.3
         version: 4.4.3
@@ -943,7 +961,7 @@ importers:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
-      openclaw:
+      jeikclaw:
         specifier: workspace:*
         version: link:../..
 
@@ -989,11 +1007,15 @@ importers:
         version: link:../../packages/plugin-sdk
 
   extensions/logbook:
+    dependencies:
+      openclaw:
+        specifier: '>=2026.7.1'
+        version: 2026.7.1(@aws-sdk/credential-provider-node@3.972.61)(@opentelemetry/api@1.9.1)(@smithy/hash-node@4.4.5)(@smithy/signature-v4@5.6.1)
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
-      openclaw:
+      jeikclaw:
         specifier: workspace:*
         version: link:../..
 
@@ -1023,6 +1045,9 @@ importers:
       music-metadata:
         specifier: 11.13.0
         version: 11.13.0
+      openclaw:
+        specifier: '>=2026.7.1'
+        version: 2026.7.1(@aws-sdk/credential-provider-node@3.972.61)(@opentelemetry/api@1.9.1)(@smithy/hash-node@4.4.5)(@smithy/signature-v4@5.6.1)
       typebox:
         specifier: 1.3.3
         version: 1.3.3
@@ -1033,12 +1058,15 @@ importers:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
-      openclaw:
+      jeikclaw:
         specifier: workspace:*
         version: link:../..
 
   extensions/mattermost:
     dependencies:
+      openclaw:
+        specifier: '>=2026.7.1'
+        version: 2026.7.1(@aws-sdk/credential-provider-node@3.972.61)(@opentelemetry/api@1.9.1)(@smithy/hash-node@4.4.5)(@smithy/signature-v4@5.6.1)
       ws:
         specifier: 8.21.0
         version: 8.21.0
@@ -1049,7 +1077,7 @@ importers:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
-      openclaw:
+      jeikclaw:
         specifier: workspace:*
         version: link:../..
 
@@ -1067,6 +1095,9 @@ importers:
       json5:
         specifier: 2.2.3
         version: 2.2.3
+      openclaw:
+        specifier: '>=2026.7.1'
+        version: 2026.7.1(@aws-sdk/credential-provider-node@3.972.61)(@opentelemetry/api@1.9.1)(@smithy/hash-node@4.4.5)(@smithy/signature-v4@5.6.1)
       typebox:
         specifier: 1.3.3
         version: 1.3.3
@@ -1074,7 +1105,7 @@ importers:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
-      openclaw:
+      jeikclaw:
         specifier: workspace:*
         version: link:../..
 
@@ -1102,6 +1133,9 @@ importers:
       mdast-util-from-markdown:
         specifier: 2.0.3
         version: 2.0.3
+      openclaw:
+        specifier: '>=2026.7.1'
+        version: 2026.7.1(@aws-sdk/credential-provider-node@3.972.61)(@opentelemetry/api@1.9.1)(@smithy/hash-node@4.4.5)(@smithy/signature-v4@5.6.1)
       typebox:
         specifier: 1.3.3
         version: 1.3.3
@@ -1115,7 +1149,7 @@ importers:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
-      openclaw:
+      jeikclaw:
         specifier: workspace:*
         version: link:../..
 
@@ -1142,16 +1176,23 @@ importers:
         version: link:../../packages/plugin-sdk
 
   extensions/migrate-claude:
+    dependencies:
+      openclaw:
+        specifier: '>=2026.7.1'
+        version: 2026.7.1(@aws-sdk/credential-provider-node@3.972.61)(@opentelemetry/api@1.9.1)(@smithy/hash-node@4.4.5)(@smithy/signature-v4@5.6.1)
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
-      openclaw:
+      jeikclaw:
         specifier: workspace:*
         version: link:../..
 
   extensions/migrate-hermes:
     dependencies:
+      openclaw:
+        specifier: '>=2026.7.1'
+        version: 2026.7.1(@aws-sdk/credential-provider-node@3.972.61)(@opentelemetry/api@1.9.1)(@smithy/hash-node@4.4.5)(@smithy/signature-v4@5.6.1)
       yaml:
         specifier: 2.9.0
         version: 2.9.0
@@ -1159,7 +1200,7 @@ importers:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
-      openclaw:
+      jeikclaw:
         specifier: workspace:*
         version: link:../..
 
@@ -1195,6 +1236,9 @@ importers:
       express:
         specifier: 5.2.1
         version: 5.2.1
+      openclaw:
+        specifier: '>=2026.7.1'
+        version: 2026.7.1(@aws-sdk/credential-provider-node@3.972.61)(@opentelemetry/api@1.9.1)(@smithy/hash-node@4.4.5)(@smithy/signature-v4@5.6.1)
       typebox:
         specifier: 1.3.3
         version: 1.3.3
@@ -1202,15 +1246,18 @@ importers:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
+      jeikclaw:
+        specifier: workspace:*
+        version: link:../..
       jose:
         specifier: 6.2.3
         version: 6.2.3
-      openclaw:
-        specifier: workspace:*
-        version: link:../..
 
   extensions/nextcloud-talk:
     dependencies:
+      openclaw:
+        specifier: '>=2026.7.1'
+        version: 2026.7.1(@aws-sdk/credential-provider-node@3.972.61)(@opentelemetry/api@1.9.1)(@smithy/hash-node@4.4.5)(@smithy/signature-v4@5.6.1)
       zod:
         specifier: 4.4.3
         version: 4.4.3
@@ -1218,7 +1265,7 @@ importers:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
-      openclaw:
+      jeikclaw:
         specifier: workspace:*
         version: link:../..
 
@@ -1227,6 +1274,9 @@ importers:
       nostr-tools:
         specifier: 2.23.9
         version: 2.23.9(typescript@6.0.3)
+      openclaw:
+        specifier: '>=2026.7.1'
+        version: 2026.7.1(@aws-sdk/credential-provider-node@3.972.61)(@opentelemetry/api@1.9.1)(@smithy/hash-node@4.4.5)(@smithy/signature-v4@5.6.1)
       zod:
         specifier: 4.4.3
         version: 4.4.3
@@ -1234,7 +1284,7 @@ importers:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
-      openclaw:
+      jeikclaw:
         specifier: workspace:*
         version: link:../..
 
@@ -1261,6 +1311,9 @@ importers:
       markdown-it:
         specifier: 14.3.0
         version: 14.3.0
+      openclaw:
+        specifier: '>=2026.7.1'
+        version: 2026.7.1(@aws-sdk/credential-provider-node@3.972.61)(@opentelemetry/api@1.9.1)(@smithy/hash-node@4.4.5)(@smithy/signature-v4@5.6.1)
       yaml:
         specifier: 2.9.0
         version: 2.9.0
@@ -1268,7 +1321,7 @@ importers:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
-      openclaw:
+      jeikclaw:
         specifier: workspace:*
         version: link:../..
 
@@ -1339,11 +1392,15 @@ importers:
         version: link:../../packages/plugin-sdk
 
   extensions/pixverse:
+    dependencies:
+      openclaw:
+        specifier: '>=2026.7.1'
+        version: 2026.7.1(@aws-sdk/credential-provider-node@3.972.61)(@opentelemetry/api@1.9.1)(@smithy/hash-node@4.4.5)(@smithy/signature-v4@5.6.1)
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
-      openclaw:
+      jeikclaw:
         specifier: workspace:*
         version: link:../..
 
@@ -1352,16 +1409,22 @@ importers:
       json5:
         specifier: 2.2.3
         version: 2.2.3
+      openclaw:
+        specifier: '>=2026.7.1'
+        version: 2026.7.1(@aws-sdk/credential-provider-node@3.972.61)(@opentelemetry/api@1.9.1)(@smithy/hash-node@4.4.5)(@smithy/signature-v4@5.6.1)
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
-      openclaw:
+      jeikclaw:
         specifier: workspace:*
         version: link:../..
 
   extensions/qa-channel:
     dependencies:
+      openclaw:
+        specifier: '>=2026.7.1'
+        version: 2026.7.1(@aws-sdk/credential-provider-node@3.972.61)(@opentelemetry/api@1.9.1)(@smithy/hash-node@4.4.5)(@smithy/signature-v4@5.6.1)
       typebox:
         specifier: 1.3.3
         version: 1.3.3
@@ -1372,7 +1435,7 @@ importers:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
-      openclaw:
+      jeikclaw:
         specifier: workspace:*
         version: link:../..
 
@@ -1384,6 +1447,9 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: 1.29.0
         version: 1.29.0(zod@4.4.3)
+      openclaw:
+        specifier: '>=2026.7.1'
+        version: 2026.7.1(@aws-sdk/credential-provider-node@3.972.61)(@opentelemetry/api@1.9.1)(@smithy/hash-node@4.4.5)(@smithy/signature-v4@5.6.1)
       playwright-core:
         specifier: 1.61.1
         version: 1.61.1
@@ -1409,12 +1475,15 @@ importers:
       '@openclaw/whatsapp':
         specifier: workspace:*
         version: link:../whatsapp
-      openclaw:
+      jeikclaw:
         specifier: workspace:*
         version: link:../..
 
   extensions/qa-matrix:
     dependencies:
+      openclaw:
+        specifier: '>=2026.7.1'
+        version: 2026.7.1(@aws-sdk/credential-provider-node@3.972.61)(@opentelemetry/api@1.9.1)(@smithy/hash-node@4.4.5)(@smithy/signature-v4@5.6.1)
       undici:
         specifier: 8.5.0
         version: 8.5.0
@@ -1425,7 +1494,7 @@ importers:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
-      openclaw:
+      jeikclaw:
         specifier: workspace:*
         version: link:../..
 
@@ -1443,6 +1512,9 @@ importers:
       mpg123-decoder:
         specifier: 1.0.3
         version: 1.0.3
+      openclaw:
+        specifier: '>=2026.7.1'
+        version: 2026.7.1(@aws-sdk/credential-provider-node@3.972.61)(@opentelemetry/api@1.9.1)(@smithy/hash-node@4.4.5)(@smithy/signature-v4@5.6.1)
       silk-wasm:
         specifier: 3.7.1
         version: 3.7.1
@@ -1459,7 +1531,7 @@ importers:
       '@types/ws':
         specifier: 8.18.1
         version: 8.18.1
-      openclaw:
+      jeikclaw:
         specifier: workspace:*
         version: link:../..
 
@@ -1471,6 +1543,9 @@ importers:
 
   extensions/raft:
     dependencies:
+      openclaw:
+        specifier: '>=2026.7.1'
+        version: 2026.7.1(@aws-sdk/credential-provider-node@3.972.61)(@opentelemetry/api@1.9.1)(@smithy/hash-node@4.4.5)(@smithy/signature-v4@5.6.1)
       zod:
         specifier: 4.4.3
         version: 4.4.3
@@ -1478,7 +1553,7 @@ importers:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
-      openclaw:
+      jeikclaw:
         specifier: workspace:*
         version: link:../..
 
@@ -1527,6 +1602,9 @@ importers:
       '@slack/web-api':
         specifier: 7.18.0
         version: 7.18.0
+      openclaw:
+        specifier: '>=2026.7.1'
+        version: 2026.7.1(@aws-sdk/credential-provider-node@3.972.61)(@opentelemetry/api@1.9.1)(@smithy/hash-node@4.4.5)(@smithy/signature-v4@5.6.1)
       typebox:
         specifier: 1.3.3
         version: 1.3.3
@@ -1540,7 +1618,7 @@ importers:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
-      openclaw:
+      jeikclaw:
         specifier: workspace:*
         version: link:../..
 
@@ -1628,6 +1706,9 @@ importers:
       '@urbit/aura':
         specifier: 3.0.0
         version: 3.0.0
+      openclaw:
+        specifier: '>=2026.7.1'
+        version: 2026.7.1(@aws-sdk/credential-provider-node@3.972.61)(@opentelemetry/api@1.9.1)(@smithy/hash-node@4.4.5)(@smithy/signature-v4@5.6.1)
       zod:
         specifier: 4.4.3
         version: 4.4.3
@@ -1635,7 +1716,7 @@ importers:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
-      openclaw:
+      jeikclaw:
         specifier: workspace:*
         version: link:../..
 
@@ -1647,6 +1728,9 @@ importers:
 
   extensions/tokenjuice:
     dependencies:
+      openclaw:
+        specifier: '>=2026.7.1'
+        version: 2026.7.1(@aws-sdk/credential-provider-node@3.972.61)(@opentelemetry/api@1.9.1)(@smithy/hash-node@4.4.5)(@smithy/signature-v4@5.6.1)
       tokenjuice:
         specifier: 0.8.1
         version: 0.8.1
@@ -1654,7 +1738,7 @@ importers:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
-      openclaw:
+      jeikclaw:
         specifier: workspace:*
         version: link:../..
 
@@ -1712,6 +1796,9 @@ importers:
       commander:
         specifier: 15.0.0
         version: 15.0.0
+      openclaw:
+        specifier: '>=2026.7.1'
+        version: 2026.7.1(@aws-sdk/credential-provider-node@3.972.61)(@opentelemetry/api@1.9.1)(@smithy/hash-node@4.4.5)(@smithy/signature-v4@5.6.1)
       typebox:
         specifier: 1.3.3
         version: 1.3.3
@@ -1725,7 +1812,7 @@ importers:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
-      openclaw:
+      jeikclaw:
         specifier: workspace:*
         version: link:../..
 
@@ -1778,6 +1865,9 @@ importers:
       baileys:
         specifier: 7.0.0-rc13
         version: 7.0.0-rc13(audio-decode@2.2.3)
+      openclaw:
+        specifier: '>=2026.7.1'
+        version: 2026.7.1(@aws-sdk/credential-provider-node@3.972.61)(@opentelemetry/api@1.9.1)(@smithy/hash-node@4.4.5)(@smithy/signature-v4@5.6.1)
       typebox:
         specifier: 1.3.3
         version: 1.3.3
@@ -1785,12 +1875,15 @@ importers:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
-      openclaw:
+      jeikclaw:
         specifier: workspace:*
         version: link:../..
 
   extensions/workboard:
     dependencies:
+      openclaw:
+        specifier: '>=2026.7.1'
+        version: 2026.7.1(@aws-sdk/credential-provider-node@3.972.61)(@opentelemetry/api@1.9.1)(@smithy/hash-node@4.4.5)(@smithy/signature-v4@5.6.1)
       typebox:
         specifier: 1.3.3
         version: 1.3.3
@@ -1798,7 +1891,7 @@ importers:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
-      openclaw:
+      jeikclaw:
         specifier: workspace:*
         version: link:../..
 
@@ -1829,6 +1922,9 @@ importers:
 
   extensions/zalo:
     dependencies:
+      openclaw:
+        specifier: '>=2026.7.1'
+        version: 2026.7.1(@aws-sdk/credential-provider-node@3.972.61)(@opentelemetry/api@1.9.1)(@smithy/hash-node@4.4.5)(@smithy/signature-v4@5.6.1)
       zod:
         specifier: 4.4.3
         version: 4.4.3
@@ -1836,12 +1932,15 @@ importers:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
-      openclaw:
+      jeikclaw:
         specifier: workspace:*
         version: link:../..
 
   extensions/zalouser:
     dependencies:
+      openclaw:
+        specifier: '>=2026.7.1'
+        version: 2026.7.1(@aws-sdk/credential-provider-node@3.972.61)(@opentelemetry/api@1.9.1)(@smithy/hash-node@4.4.5)(@smithy/signature-v4@5.6.1)
       typebox:
         specifier: 1.3.3
         version: 1.3.3
@@ -1855,7 +1954,7 @@ importers:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
-      openclaw:
+      jeikclaw:
         specifier: workspace:*
         version: link:../..
 
@@ -1968,7 +2067,7 @@ importers:
 
   packages/speech-core:
     dependencies:
-      openclaw:
+      jeikclaw:
         specifier: workspace:*
         version: link:../..
 
@@ -3196,6 +3295,14 @@ packages:
     engines: {node: '>=16'}
     cpu: [x64]
     os: [win32]
+
+  '@openclaw/ai@2026.7.1':
+    resolution: {integrity: sha512-FsKy5DXSHf4qyN8Huoz/10HZRgoEwLF4uk8UWaCafaIler+q5Fsl51HcrIqIrEe0S38OT7LOaxnR++MOshAlmw==}
+    engines: {node: '>=22.19.0'}
+
+  '@openclaw/ai@2026.7.1-2':
+    resolution: {integrity: sha512-st+NH0cxlQqdbEur//yYqM7WlYBjeEBnop3cztJTSCONKjv6LNoGguI9cH65asZG94FdM/39z857isRGPnZvEw==}
+    engines: {node: '>=22.19.0'}
 
   '@openclaw/crabline@0.1.9':
     resolution: {integrity: sha512-i3RZ/qAMM1dnNEaj4KwcO1iJRXJIrvfTRIXdMiy7SgZh8A7EUCFNPNviC3URLirX9wIYrkuVTyk9QHKOFPcz7g==}
@@ -6422,6 +6529,11 @@ packages:
       zod:
         optional: true
 
+  openclaw@2026.7.1:
+    resolution: {integrity: sha512-ge/Xss99CHAjPL/ikmH/UFoiOrjcxDB4sW3y9mhyCD+dYW3wzV7TKbAVdkrXFgAG2d2BjpJofP97zUZ+umxo8g==}
+    engines: {node: '>=22.22.3 <23 || >=24.15.0 <25 || >=25.9.0'}
+    hasBin: true
+
   opus-decoder@0.7.11:
     resolution: {integrity: sha512-+e+Jz3vGQLxRTBHs8YJQPRPc1Tr+/aC6coV/DlZylriA29BdHQAYXhvNRKtjftof17OFng0+P4wsFIqQu3a48A==}
 
@@ -8974,6 +9086,46 @@ snapshots:
 
   '@openai/codex@0.144.1-win32-x64':
     optional: true
+
+  '@openclaw/ai@2026.7.1(@aws-sdk/credential-provider-node@3.972.61)(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))(@opentelemetry/api@1.9.1)(@smithy/hash-node@4.4.5)(@smithy/signature-v4@5.6.1)(ws@8.21.0)(zod@4.4.3)':
+    dependencies:
+      '@anthropic-ai/sdk': 0.109.1(zod@4.4.3)
+      '@google/genai': 2.10.0(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))
+      '@mistralai/mistralai': 2.4.0(@opentelemetry/api@1.9.1)
+      openai: 6.45.0(@aws-sdk/credential-provider-node@3.972.61)(@smithy/hash-node@4.4.5)(@smithy/signature-v4@5.6.1)(ws@8.21.0)(zod@4.4.3)
+      partial-json: 0.1.7
+      typebox: 1.3.3
+    transitivePeerDependencies:
+      - '@aws-sdk/credential-provider-node'
+      - '@modelcontextprotocol/sdk'
+      - '@opentelemetry/api'
+      - '@smithy/hash-node'
+      - '@smithy/signature-v4'
+      - bufferutil
+      - supports-color
+      - utf-8-validate
+      - ws
+      - zod
+
+  '@openclaw/ai@2026.7.1-2(@aws-sdk/credential-provider-node@3.972.61)(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))(@opentelemetry/api@1.9.1)(@smithy/hash-node@4.4.5)(@smithy/signature-v4@5.6.1)(ws@8.21.0)(zod@4.4.3)':
+    dependencies:
+      '@anthropic-ai/sdk': 0.109.1(zod@4.4.3)
+      '@google/genai': 2.10.0(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))
+      '@mistralai/mistralai': 2.4.0(@opentelemetry/api@1.9.1)
+      openai: 6.45.0(@aws-sdk/credential-provider-node@3.972.61)(@smithy/hash-node@4.4.5)(@smithy/signature-v4@5.6.1)(ws@8.21.0)(zod@4.4.3)
+      partial-json: 0.1.7
+      typebox: 1.3.3
+    transitivePeerDependencies:
+      - '@aws-sdk/credential-provider-node'
+      - '@modelcontextprotocol/sdk'
+      - '@opentelemetry/api'
+      - '@smithy/hash-node'
+      - '@smithy/signature-v4'
+      - bufferutil
+      - supports-color
+      - utf-8-validate
+      - ws
+      - zod
 
   '@openclaw/crabline@0.1.9':
     dependencies:
@@ -12459,6 +12611,79 @@ snapshots:
       '@smithy/signature-v4': 5.6.1
       ws: 8.21.0
       zod: 4.4.3
+
+  openclaw@2026.7.1(@aws-sdk/credential-provider-node@3.972.61)(@opentelemetry/api@1.9.1)(@smithy/hash-node@4.4.5)(@smithy/signature-v4@5.6.1):
+    dependencies:
+      '@agentclientprotocol/sdk': 1.1.0(zod@4.4.3)
+      '@anthropic-ai/sdk': 0.109.1(zod@4.4.3)
+      '@clack/core': 1.4.2
+      '@clack/prompts': 1.6.0
+      '@earendil-works/pi-tui': 0.80.3
+      '@google/genai': 2.10.0(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))
+      '@grammyjs/runner': 2.0.3(grammy@1.44.0)
+      '@grammyjs/transformer-throttler': 1.2.1(grammy@1.44.0)
+      '@homebridge/ciao': 1.3.9
+      '@lydell/node-pty': 1.2.0-beta.12
+      '@mistralai/mistralai': 2.4.0(@opentelemetry/api@1.9.1)
+      '@modelcontextprotocol/sdk': 1.29.0(zod@4.4.3)
+      '@mozilla/readability': 0.6.0
+      '@openclaw/ai': 2026.7.1(@aws-sdk/credential-provider-node@3.972.61)(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))(@opentelemetry/api@1.9.1)(@smithy/hash-node@4.4.5)(@smithy/signature-v4@5.6.1)(ws@8.21.0)(zod@4.4.3)
+      '@openclaw/fs-safe': 0.4.1(patch_hash=e49004277fcb3e714125baf15a996682c7310e8e9269c865cc5bcb9fef46a57c)
+      '@openclaw/proxyline': 0.3.3(undici@8.5.0)
+      '@silvia-odwyer/photon-node': 0.3.4
+      chalk: 5.6.2
+      chokidar: 5.0.0
+      clawpdf: 0.3.0
+      commander: 15.0.0
+      croner: 10.0.1
+      diff: 9.0.0
+      dotenv: 17.4.2
+      express: 5.2.1
+      file-type: 22.0.1
+      glob: 13.0.6
+      grammy: 1.44.0
+      highlight.js: 11.11.1
+      hosted-git-info: 10.1.1
+      ignore: 7.0.5
+      jiti: 2.7.0
+      json5: 2.2.3
+      jszip: 3.10.1
+      kysely: 0.29.2
+      linkedom: 0.18.12
+      minimatch: 10.2.5
+      node-edge-tts: 1.2.10
+      openai: 6.45.0(@aws-sdk/credential-provider-node@3.972.61)(@smithy/hash-node@4.4.5)(@smithy/signature-v4@5.6.1)(ws@8.21.0)(zod@4.4.3)
+      partial-json: 0.1.7
+      playwright-core: 1.61.1
+      proper-lockfile: 4.1.2
+      qrcode: 1.5.4
+      quickjs-wasi: 3.0.2
+      rastermill: 0.3.1
+      tar: 7.5.19
+      tree-sitter-bash: 0.25.1
+      tslog: 4.10.2
+      typebox: 1.3.3
+      typescript: 6.0.3
+      undici: 8.5.0
+      web-push: 3.6.7
+      web-tree-sitter: 0.26.10
+      ws: 8.21.0
+      yaml: 2.9.0
+      zod: 4.4.3
+    optionalDependencies:
+      sqlite-vec: 0.1.9
+    transitivePeerDependencies:
+      - '@aws-sdk/credential-provider-node'
+      - '@cfworker/json-schema'
+      - '@opentelemetry/api'
+      - '@smithy/hash-node'
+      - '@smithy/signature-v4'
+      - bufferutil
+      - canvas
+      - encoding
+      - supports-color
+      - tree-sitter
+      - utf-8-validate
 
   opus-decoder@0.7.11:
     dependencies:
