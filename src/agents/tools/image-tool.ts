@@ -1013,7 +1013,14 @@ export function createImageTool(options?: {
               })
             : {
                 resolved: resolvedImage.startsWith("file://")
-                  ? resolvedImage.slice("file://".length)
+                  ? ((): string => {
+                      const sliced = resolvedImage.slice("file://".length);
+                      try {
+                        return decodeURIComponent(sliced);
+                      } catch {
+                        return sliced;
+                      }
+                    })()
                   : resolvedImage,
               };
         const resolvedPath = isDataUrl ? null : resolvedPathInfo.resolved;

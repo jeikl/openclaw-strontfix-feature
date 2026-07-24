@@ -3,6 +3,7 @@
  *
  * Resolves provider/model config, local roots, auth availability, SSRF policy, and media reference inputs.
  */
+import path from "node:path";
 import { normalizeInboundPathRoots } from "@openclaw/media-core/inbound-path-policy";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { parseBoolean } from "@openclaw/normalization-core/boolean-coercion";
@@ -571,7 +572,7 @@ export function resolveMediaToolLocalRoots(
     channelId?: string | null;
     accountId?: string | null;
   },
-  _mediaSources?: readonly string[],
+  mediaSources?: readonly string[],
 ): string[] {
   const workspaceDir = normalizeWorkspaceDir(workspaceDirRaw);
   if (options?.workspaceOnly) {
@@ -580,7 +581,25 @@ export function resolveMediaToolLocalRoots(
   // Channel inbound attachment roots stay separate: those paths are scoped to inbound media
   // access, not broad host-local file reads.
   const roots = getDefaultLocalRoots();
-  return uniqueStrings([...roots, ...(workspaceDir ? [workspaceDir] : [])]);
+  const sourceRoots: string[] = [];
+  if (mediaSources?.length) {
+    for (const source of mediaSources) {
+      if (!source) continue;
+      let normalized = source.startsWith("file://") ? source.slice("file://".length) : source;
+      try {
+        normalized = decodeURIComponent(normalized);
+      } catch {
+        /* keep original if decode fails */
+      }
+      if (path.isAbsolute(normalized)) {
+        const dir = path.dirname(normalized);
+        if (dir && dir !== path.parse(dir).root) {
+          sourceRoots.push(dir);
+        }
+      }
+    }
+  }
+  return uniqueStrings([...roots, ...(workspaceDir ? [workspaceDir] : []), ...sourceRoots]);
 }
 
 /**
