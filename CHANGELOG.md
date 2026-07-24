@@ -2,6 +2,13 @@
 
 Docs: https://docs.openclaw.ai
 
+## 2026.7.24-6
+
+- **Media & Net:** Support Dual-DNS with DoH (DNS-over-HTTPS) to bypass soft-router DNS port 53 hijacking.
+- **Vision:** Support direct public URL pass-through and automatic fallback retry using Base64.
+- **Media Access:** Support reading local media files from non-workspace absolute paths (SMB/NAS mounts) and URL-decoded `file://` paths.
+- **Build & Infra:** Add `pnpm build:fast` / `pnpm build:backend` shortcuts and cap Node.js build memory at 6GB.
+
 ## 2026.7.24-5
 
 - **Infra:** comprehensively support `jeikclaw` production compatibility and execution guards.
