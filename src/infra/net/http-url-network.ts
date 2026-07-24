@@ -12,7 +12,7 @@
  * Used by image tool (prefer pass-through public URL to vision APIs)
  * and can inform web_fetch SSRF decisions.
  */
-import { promises as dnsPromises, Resolver } from "node:dns";
+import { lookup as dnsLookup, Resolver } from "node:dns/promises";
 import { normalizeHostname } from "./hostname.js";
 import { isPrivateIpAddress } from "./ssrf.js";
 
@@ -45,7 +45,7 @@ async function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
 async function lookupAllSystem(hostname: string): Promise<string[]> {
   try {
     const results = await withTimeout(
-      dnsPromises.lookup(hostname, { all: true, verbatim: true }),
+      dnsLookup(hostname, { all: true, verbatim: true }),
       LOOKUP_TIMEOUT_MS,
     );
     return results.map((r) => r.address).filter(Boolean);
