@@ -1135,6 +1135,7 @@ export function createImageTool(options?: {
                 });
                 if (fallbackMedia.kind === "image") {
                   img.buffer = fallbackMedia.buffer;
+                  delete img.url;
                   const contentType =
                     "contentType" in fallbackMedia && typeof fallbackMedia.contentType === "string"
                       ? fallbackMedia.contentType
@@ -1157,11 +1158,11 @@ export function createImageTool(options?: {
             imageModelConfig,
             modelOverride,
             prompt: promptRaw,
-            images: loadedImages.map((img) => ({
-              ...(img.buffer ? { buffer: img.buffer } : {}),
-              ...(img.url ? { url: img.url } : {}),
-              mimeType: img.mimeType,
-            })),
+            images: loadedImages.map((img) =>
+              img.buffer
+                ? { buffer: img.buffer, mimeType: img.mimeType }
+                : { url: img.url, mimeType: img.mimeType },
+            ),
             workspaceDir: options?.workspaceDir,
           });
         } else {
