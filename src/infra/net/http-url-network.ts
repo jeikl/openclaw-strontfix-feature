@@ -54,12 +54,29 @@ async function lookupAllSystem(hostname: string): Promise<string[]> {
   }
 }
 
+async function lookupDoH(hostname: string): Promise<string[]> {
+  try {
+    const res = await withTimeout(
+      fetch(`https://dns.alidns.com/resolve?name=${encodeURIComponent(hostname)}&type=A`, {
+        headers: { accept: "application/json" },
+      }),
+      LOOKUP_TIMEOUT_MS,
+    );
+    if (!res.ok) return [];
+    const data = (await res.json()) as { Answer?: Array<{ data?: string }> };
+    if (!Array.isArray(data.Answer)) return [];
+    return data.Answer.map((ans) => String(ans.data ?? "").trim()).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
 async function lookupAllPublicDns(hostname: string): Promise<string[]> {
   const resolver = new Resolver();
   resolver.setServers([...PUBLIC_DNS_SERVERS]);
   const out = new Set<string>();
   try {
-    const [v4, v6] = await Promise.all([
+    const [v4, v6, doh] = await Promise.all([
       withTimeout(
         resolver.resolve4(hostname).catch(() => [] as string[]),
         LOOKUP_TIMEOUT_MS,
@@ -68,9 +85,11 @@ async function lookupAllPublicDns(hostname: string): Promise<string[]> {
         resolver.resolve6(hostname).catch(() => [] as string[]),
         LOOKUP_TIMEOUT_MS,
       ),
+      lookupDoH(hostname),
     ]);
     for (const a of v4) out.add(a);
     for (const a of v6) out.add(a);
+    for (const a of doh) out.add(a);
   } catch {
     /* ignore */
   }
