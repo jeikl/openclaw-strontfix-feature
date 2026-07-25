@@ -2,6 +2,10 @@
 
 Docs: https://docs.openclaw.ai
 
+## 2026.7.742
+
+- **Misc:** Preparation for npm release.
+
 ## 2026.7.241
 
 - **Media & Net:** Support Dual-DNS with DoH (DNS-over-HTTPS) to bypass soft-router DNS port 53 hijacking.
