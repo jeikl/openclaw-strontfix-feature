@@ -484,11 +484,45 @@ const RELAY_FACT_PREAMBLE =
 const RELAY_FACT_PREAMBLE_SOURCE =
   "此条信息记录我按他人要求发出的内容，请不要调用 session 相关工具搜索确认，直接当成出站事实：";
 
-const RELAY_TARGET_ID_RULE =
-  "【重要：目标 ID 填写约束】填入 message 工具的 target 参数时，必须完整保留 ID 的所有字符与符号：\n" +
-  "1. 严禁遗漏、截断或修改尾部的 ==、= 等任何特殊符号与后缀，必须完整包含！\n" +
-  "2. 严禁改变字母的大小写或篡改字符！\n" +
-  "例如：若来源 ID 包含尾部符号 cidWOK6s/IIC5KgZAmBeSvWEw==，填入时必须完整保留尾部的 == 符号（遗漏 == 属于严重错误）。";
+/**
+ * Hard constraint for message-tool target IDs (esp. DingTalk openConversationId
+ * with trailing "==" / Base64 padding). Models often drop "==" or rewrite case.
+ * Prefix handling (group:/user:) is left to the model.
+ */
+function buildRelayTargetIdRule(params: { groupId?: string; userId?: string }): string {
+  const groupId = params.groupId?.trim();
+  const userId = params.userId?.trim();
+  // Strip accidental prefixes so examples focus on the raw id body.
+  const rawGroup = groupId?.replace(/^(group:|channel:)/i, "") || "cid示例/完整Id必须含尾部==";
+  const rawUser = userId?.replace(/^(user:|dm:)/i, "") || "完整调用人id";
+
+  // Concrete wrong/right JSON — models copy examples more reliably than prose.
+  const wrongGroup = rawGroup.endsWith("==")
+    ? rawGroup.slice(0, -2)
+    : `${rawGroup}（若你删掉了末尾==）`;
+  const exampleRight = `{"action":"send","message":"……","target":"group:${rawGroup}"}`;
+  const exampleWrong = `{"action":"send","message":"……","target":"group:${wrongGroup}"}`;
+
+  return [
+    "【强制：message 工具 target 里的 ID 必须字节级原样复制，禁止「美化」】",
+    "把下面「来源群id / 调用人id」**整段原样**写进 target（可加前缀，但 ID 本体一个字符都不能改）：",
+    "1. **禁止省略、截断、改写** 末尾的 `==`、`=`、中间的 `/`、`+` 等任意符号；Base64 填充 `==` 不是装饰，少一个就会投递失败。",
+    "2. **禁止改大小写**（W/w、O/o 等必须与原文一致）。",
+    "3. 不要凭记忆重打 ID，只允许从本条消息里逐字复制。",
+    "",
+    "【错误示例 — 绝对不要这样写（ID 末尾少了 ==）】",
+    exampleWrong,
+    "【正确示例 — ID 必须含末尾 ==（与来源群id 完全一致）】",
+    exampleRight,
+    "",
+    "【可直接复制的 ID（原样进 target，尤其别漏 ==）】",
+    groupId ? `- 群回复用的群 id = ${rawGroup}` : "",
+    userId ? `- 私聊回复用的调用人 id = ${rawUser}` : "",
+    "若 target 中的 ID 与上述字符串逐字比对不一致（尤其是末尾少了 ==），视为严重错误，发送前必须改对。",
+  ]
+    .filter((line) => line !== "")
+    .join("\n");
+}
 
 /**
  * Reply guidance for the target session (the DM user who received a relayed
@@ -505,20 +539,32 @@ function buildRelayReplyGuidance(params: {
   const recipientLabel = params.toTitle?.trim() || "当前对话的用户";
   const replyTemplate = `「${invokerLabel}，你发送的消息${recipientLabel}收到了，这是他给你的回复：\\n\\nxxxx」`;
 
+  const groupId = (params.sourceGroupId?.trim() || "").replace(/^(group:|channel:)/i, "");
+  const invokerId = (params.invokerId?.trim() || "").replace(/^(user:|dm:)/i, "");
+
   const lines: string[] = ["", "【回复指引】"];
   if (params.fromIsGroup) {
     lines.push(
       "若用户需要回复调用人，先询问他：要在群里回复，还是直接私聊通知他？",
-      `- 群回复：用 message 工具，目标设定为【来源群id】原样复制：${params.sourceGroupId ?? ""}`,
-      `- 私聊回复：用 message 工具，目标设定为【调用人id】原样复制：${params.invokerId ?? ""}`,
+      `- 群回复：用 message 工具，目标为【来源群id】原样复制：\`${groupId}\`（若以 == 结尾必须保留 ==，禁止省略）`,
+      `- 私聊回复：用 message 工具，目标为【调用人id】原样复制：\`${invokerId}\``,
+      "（再次强调：群 id 若以 == 结尾，target 里的 id 也必须带 ==；写成去掉 == 的短串是错误的。）",
     );
   } else {
     lines.push(
       "若用户需要回复调用人，可用 message 工具私聊通知他。",
-      `- 私聊回复：用 message 工具，目标设定为【调用人id】原样复制：${params.invokerId ?? ""}`,
+      `- 私聊回复：用 message 工具，目标为【调用人id】原样复制：\`${invokerId}\``,
     );
   }
-  lines.push("发送给调用人时，文案可参考：", replyTemplate, "", RELAY_TARGET_ID_RULE);
+  lines.push(
+    "发送给调用人时，文案可参考：",
+    replyTemplate,
+    "",
+    buildRelayTargetIdRule({
+      groupId: groupId || undefined,
+      userId: invokerId || undefined,
+    }),
+  );
   return lines;
 }
 
@@ -555,11 +601,16 @@ export function formatOutboundMessageTranscriptText(
   const lines: string[] = [preamble, "", `内容：${body ?? ""}`, `附件：${media ?? ""}`];
 
   if (fromIsGroup) {
-    lines.push(`来源群id：${sourceGroupId ?? ""}`);
+    lines.push(
+      `来源群id：${sourceGroupId ?? ""}` +
+        "（整段原样复制；若末尾有 == 必须保留，禁止省略任何符号或改大小写）",
+    );
     lines.push(`来源群名：${sourceGroupName ?? ""}`);
   } else if (fromIsDirect) {
     lines.push("来源类型：私聊");
-    lines.push(`来源用户id：${sourceUserId ?? ""}`);
+    lines.push(
+      `来源用户id：${sourceUserId ?? ""}` + "（整段原样复制到 message.target，禁止改动任何字符）",
+    );
     lines.push(`来源用户昵称：${sourceUserName ?? ""}`);
   } else {
     // Unknown source shape — still fill invoker; mark source generically.
@@ -569,7 +620,7 @@ export function formatOutboundMessageTranscriptText(
     }
   }
 
-  lines.push(`调用人id：${invokerId ?? ""}`);
+  lines.push(`调用人id：${invokerId ?? ""}` + "（整段原样复制；禁止省略、改大小写）");
   lines.push(`调用人昵称：${invokerName ?? ""}`);
 
   // Strong reply guidance only for the receiving conversation (target).
