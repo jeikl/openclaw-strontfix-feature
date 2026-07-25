@@ -485,7 +485,10 @@ const RELAY_FACT_PREAMBLE_SOURCE =
   "此条信息记录我按他人要求发出的内容，请不要调用 session 相关工具搜索确认，直接当成出站事实：";
 
 const RELAY_TARGET_ID_RULE =
-  "当填入 message 目标 id 时，不可以更改任何一个字符、字母的大小写，给的是什么样就填什么。";
+  "【重要：目标 ID 填写约束】填入 message 工具的 target 参数时，必须完整保留 ID 的所有字符与符号：\n" +
+  "1. 严禁遗漏、截断或修改尾部的 ==、= 等任何特殊符号与后缀，必须完整包含！\n" +
+  "2. 严禁改变字母的大小写或篡改字符！\n" +
+  "例如：若来源 ID 包含尾部符号 cidWOK6s/IIC5KgZAmBeSvWEw==，填入时必须完整保留尾部的 == 符号（遗漏 == 属于严重错误）。";
 
 /**
  * Reply guidance for the target session (the DM user who received a relayed

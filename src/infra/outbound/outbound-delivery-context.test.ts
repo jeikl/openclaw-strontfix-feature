@@ -185,7 +185,8 @@ describe("buildOutboundMessagePayload", () => {
     expect(text).toContain("要在群里回复，还是直接私聊通知他");
     expect(text).toContain("目标设定为【来源群id】原样复制：cid123");
     expect(text).toContain("目标设定为【调用人id】原样复制：staff-1");
-    expect(text).toContain("不可以更改任何一个字符、字母的大小写");
+    expect(text).toContain("【重要：目标 ID 填写约束】");
+    expect(text).toContain("严禁遗漏、截断或修改尾部的 ==、= 等任何特殊符号");
     expect(text).toContain("不是不是来夫人，你发送的消息当前对话的用户收到了，这是他给你的回复");
     expect(text).toContain("[原始信息]");
     expect(text).not.toContain("来源类型：私聊");
@@ -234,7 +235,8 @@ describe("buildOutboundMessagePayload", () => {
     expect(text).toContain("内容：你好");
     expect(text).toContain("【回复指引】");
     expect(text).toContain("目标设定为【调用人id】原样复制：staff-9");
-    expect(text).toContain("不可以更改任何一个字符、字母的大小写");
+    expect(text).toContain("【重要：目标 ID 填写约束】");
+    expect(text).toContain("严禁遗漏、截断或修改尾部的 ==、= 等任何特殊符号");
     expect(text).not.toContain("来源群id");
     expect(text).not.toContain("来源群名");
     expect(text).not.toContain("要在群里回复");
