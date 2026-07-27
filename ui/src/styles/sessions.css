@@ -157,6 +157,61 @@
   opacity: 0.45;
 }
 
+.session-filter-field--agent {
+  min-width: 10.5rem;
+  max-width: 16rem;
+  flex: 0 1 14rem;
+}
+
+/*
+ * Native <select> popups follow the element's color-scheme. Without an explicit
+ * scheme + solid option colors, dark themes inherit light text onto the OS's
+ * light dropdown panel (white-on-white). Inherit from :root[data-theme-mode].
+ */
+.session-filter-select {
+  min-width: 7rem;
+  max-width: 14rem;
+  height: 24px;
+  box-sizing: border-box;
+  padding: 0 1.1rem 0 6px;
+  color: var(--text-strong);
+  /* Solid fill so closed state is readable in light and dark */
+  background-color: transparent;
+  border: none;
+  border-radius: calc(var(--radius-sm) - 2px);
+  font-family: var(--font-sans, inherit);
+  font-size: 12px;
+  font-weight: 500;
+  outline: none;
+  cursor: pointer;
+  appearance: none;
+  color-scheme: inherit;
+  background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%),
+    linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+  background-position:
+    calc(100% - 0.55rem) 55%,
+    calc(100% - 0.25rem) 55%;
+  background-size:
+    0.3rem 0.3rem,
+    0.3rem 0.3rem;
+  background-repeat: no-repeat;
+}
+
+.session-filter-select option,
+.session-filter-select optgroup {
+  color: var(--text-strong);
+  background-color: var(--bg-elevated);
+}
+
+.session-filter-select:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.session-filter-select:disabled option {
+  color: var(--muted);
+}
+
 .session-filter-check {
   position: relative;
   display: inline-flex;
@@ -245,11 +300,32 @@
 .session-groupby__select {
   height: 30px;
   padding: 0 8px;
-  color: var(--text);
+  color: var(--text-strong);
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   font-size: 12px;
+  color-scheme: inherit;
+  cursor: pointer;
+}
+
+.session-groupby__select option {
+  color: var(--text-strong);
+  background-color: var(--bg-elevated);
+}
+
+/* Pagination size control shares the same dark/light popup issue */
+.data-table-pagination__size {
+  color: var(--text-strong);
+  background-color: var(--card);
+  border: 1px solid var(--border);
+  color-scheme: inherit;
+  cursor: pointer;
+}
+
+.data-table-pagination__size option {
+  color: var(--text-strong);
+  background-color: var(--bg-elevated);
 }
 
 /* --- Table --- */

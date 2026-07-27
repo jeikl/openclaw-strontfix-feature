@@ -233,6 +233,33 @@ describe("attempt trajectory status", () => {
     ).toEqual({ status: "success" });
   });
 
+  it("does not treat pre-tool planning text as success after tools without a post-tool answer", () => {
+    // Model said "I'll call the tool", tools ran, then the turn ended with
+    // stop but no post-tool visible answer on the terminal assistant message.
+    expect(
+      resolveAttemptTrajectoryTerminal(
+        baseParams({
+          assistantTexts: ["好的 我开始调用工具"],
+          toolMetas: [{ toolName: "read" }],
+          lastAssistantStopReason: "stop",
+        }),
+      ),
+    ).toEqual({
+      status: "error",
+      terminalError: NON_DELIVERABLE_TERMINAL_TURN_REASON,
+    });
+    expect(
+      resolveAttemptTrajectoryTerminal(
+        baseParams({
+          assistantTexts: ["好的 我开始调用工具", "这里是工具结果总结"],
+          toolMetas: [{ toolName: "read" }],
+          lastAssistantStopReason: "stop",
+          lastAssistantVisibleText: "这里是工具结果总结",
+        }),
+      ),
+    ).toEqual({ status: "success" });
+  });
+
   it("marks internally aborted tool-use attempts without delivery as non-deliverable", () => {
     expect(
       resolveAttemptTrajectoryTerminal(

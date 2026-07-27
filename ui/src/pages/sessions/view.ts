@@ -39,6 +39,11 @@ import {
   normalizeOptionalString,
 } from "../../lib/string-coerce.ts";
 
+export type SessionsAgentOption = {
+  id: string;
+  label: string;
+};
+
 export type SessionsProps = {
   loading: boolean;
   result: SessionsListResult | null;
@@ -48,6 +53,9 @@ export type SessionsProps = {
   includeGlobal: boolean;
   includeUnknown: boolean;
   showArchived: boolean;
+  /** Empty string = all agents. */
+  filterAgentId: string;
+  agentOptions: readonly SessionsAgentOption[];
   mainKey: string;
   basePath: string;
   searchQuery: string;
@@ -72,6 +80,7 @@ export type SessionsProps = {
     showArchived: boolean;
   }) => void;
   onClearFilters: () => void;
+  onFilterAgentChange: (agentId: string) => void;
   onSearchChange: (query: string) => void;
   onSortChange: (column: "key" | "kind" | "updated" | "tokens", dir: "asc" | "desc") => void;
   onGroupByChange: (mode: SessionsGroupBy) => void;
@@ -350,6 +359,7 @@ function hasPositiveNumberFilter(value: string): boolean {
 function hasActiveFilters(props: SessionsProps): boolean {
   return (
     normalizeLowercaseStringOrEmpty(props.searchQuery).length > 0 ||
+    normalizeLowercaseStringOrEmpty(props.filterAgentId).length > 0 ||
     hasPositiveNumberFilter(props.activeMinutes) ||
     hasPositiveNumberFilter(props.limit) ||
     !props.includeGlobal ||
@@ -703,13 +713,24 @@ function renderOverrideSelect(params: {
 
 export function renderSessions(props: SessionsProps) {
   const rawRows = props.result?.sessions ?? [];
+  // Search is primarily applied server-side via sessions.list. Client refine still
+  // covers agent identity display names (not always in the gateway search index).
   const filtered = filterRows(rawRows, props.searchQuery, props.agentIdentityById);
   const sorted = sortRows(filtered, props.sortColumn, props.sortDir);
-  const totalRows = sorted.length;
-  const totalPages = Math.max(1, Math.ceil(totalRows / props.pageSize));
-  const page = Math.min(props.page, totalPages - 1);
   // Grouping shows all rows in their sections; pagination would split groups confusingly.
   const groupingActive = props.groupBy !== "none";
+  // Prefer gateway totalCount/hasMore so Next page walks the full store, not
+  // just the currently loaded page window.
+  const serverTotal = props.result?.totalCount;
+  const serverHasMore = props.result?.hasMore === true;
+  const hasServerTotal =
+    typeof serverTotal === "number" && Number.isFinite(serverTotal) && serverTotal >= 0;
+  const pageRows = sorted.length;
+  const totalRows = hasServerTotal ? serverTotal : pageRows;
+  const totalPages = groupingActive
+    ? 1
+    : Math.max(1, Math.ceil(Math.max(totalRows, 1) / props.pageSize));
+  const page = Math.min(props.page, Math.max(0, totalPages - 1));
   const groups = groupingActive
     ? groupSessionRows({
         rows: sorted,
@@ -717,16 +738,29 @@ export function renderSessions(props: SessionsProps) {
         knownCategories: props.knownCategories,
       })
     : null;
-  const paginated = groupingActive ? sorted : paginateRows(sorted, page, props.pageSize);
+  // Rows are already a server page (offset/limit); do not re-slice client-side.
+  const paginated = sorted;
   const emptyBecauseFiltered =
     rawRows.length === 0 ? hasActiveFilters(props) : filtered.length === 0;
   const liveCount = rawRows.filter((row) => isSessionRunActive(row)).length;
+  const countLabel = String(totalRows);
   const loadedLabel =
-    rawRows.length === 1
-      ? t("sessionsView.groupRowCountOne", { count: "1" })
-      : t("sessionsView.groupRowCount", { count: String(rawRows.length) });
-  const activeTooltip = t("sessionsView.activeTooltip", { count: props.activeMinutes.trim() });
+    totalRows === 1
+      ? t("sessionsView.groupRowCountOne", { count: countLabel })
+      : t("sessionsView.groupRowCount", { count: countLabel });
+  const rangeStart = pageRows === 0 ? 0 : page * props.pageSize + 1;
+  const rangeEnd = pageRows === 0 ? 0 : page * props.pageSize + pageRows;
+  const canGoPrev = page > 0;
+  // Prefer explicit server hasMore/totalCount; fall back to "full page ⇒ maybe more".
+  const canGoNext =
+    !groupingActive &&
+    (serverHasMore ||
+      (hasServerTotal ? page < totalPages - 1 : pageRows >= props.pageSize && pageRows > 0));
+  const activeTooltip = t("sessionsView.activeTooltip", {
+    count: props.activeMinutes.trim() || "∞",
+  });
   const limitTooltip = t("sessionsView.limitTooltip");
+  const agentFilterTooltip = t("sessionsView.agentFilterTooltip");
   const globalTooltip = t("sessionsView.globalTooltip");
   const unknownTooltip = t("sessionsView.unknownTooltip");
   const showArchivedTooltip = t("sessionsView.archivedOnlyTooltip");
@@ -758,7 +792,7 @@ export function renderSessions(props: SessionsProps) {
           <div class="card-title sessions-header__title">
             ${t("sessionsView.title")}
             ${props.result
-              ? html`<span class="sessions-header__count">${rawRows.length}</span>`
+              ? html`<span class="sessions-header__count">${totalRows}</span>`
               : nothing}
           </div>
           ${props.result
@@ -799,6 +833,30 @@ export function renderSessions(props: SessionsProps) {
               @input=${(e: Event) => props.onSearchChange((e.target as HTMLInputElement).value)}
             />
           </div>
+          <openclaw-tooltip .content=${agentFilterTooltip}>
+            <label class="session-filter-field session-filter-field--agent">
+              <span class="session-filter-label">${t("sessionsView.agent")}</span>
+              <select
+                class="session-filter-select session-filter-select--agent"
+                aria-label=${t("sessionsView.agentFilter")}
+                .value=${props.filterAgentId}
+                ?disabled=${props.loading}
+                @change=${(e: Event) =>
+                  props.onFilterAgentChange((e.target as HTMLSelectElement).value)}
+              >
+                <option value="" ?selected=${props.filterAgentId === ""}>
+                  ${t("sessionsView.allAgents")}
+                </option>
+                ${props.agentOptions.map(
+                  (option) => html`
+                    <option value=${option.id} ?selected=${props.filterAgentId === option.id}>
+                      ${option.label}
+                    </option>
+                  `,
+                )}
+              </select>
+            </label>
+          </openclaw-tooltip>
           <div class="session-filter-primary-row">
             <openclaw-tooltip .content=${activeTooltip}>
               <label class="session-filter-field">
@@ -996,12 +1054,12 @@ export function renderSessions(props: SessionsProps) {
           </table>
         </div>
 
-        ${totalRows > 0 && !groupingActive
+        ${pageRows > 0 && !groupingActive
           ? html`
               <div class="data-table-pagination">
                 <div class="data-table-pagination__info">
-                  ${page * props.pageSize + 1}-${Math.min((page + 1) * props.pageSize, totalRows)}
-                  of ${totalRows} row${totalRows === 1 ? "" : "s"}
+                  ${rangeStart}-${rangeEnd} of ${totalRows} row${totalRows === 1 ? "" : "s"}
+                  ${serverHasMore && page >= totalPages - 1 ? "+" : ""}
                 </div>
                 <div class="data-table-pagination__controls">
                   <select
@@ -1012,13 +1070,10 @@ export function renderSessions(props: SessionsProps) {
                   >
                     ${PAGE_SIZES.map((s) => html`<option value=${s}>${s} per page</option>`)}
                   </select>
-                  <button ?disabled=${page <= 0} @click=${() => props.onPageChange(page - 1)}>
+                  <button ?disabled=${!canGoPrev} @click=${() => props.onPageChange(page - 1)}>
                     Previous
                   </button>
-                  <button
-                    ?disabled=${page >= totalPages - 1}
-                    @click=${() => props.onPageChange(page + 1)}
-                  >
+                  <button ?disabled=${!canGoNext} @click=${() => props.onPageChange(page + 1)}>
                     ${t("common.next")}
                   </button>
                 </div>

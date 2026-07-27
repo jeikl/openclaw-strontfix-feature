@@ -26,12 +26,14 @@ import {
 import {
   areUiSessionKeysEquivalent,
   buildAgentMainSessionKey,
+  normalizeAgentId,
   parseAgentSessionKey,
   resolveUiConfiguredMainKey,
 } from "../../lib/sessions/session-key.ts";
+import { resolveSessionAgentFilterOptions } from "../../lib/sessions/session-options.ts";
 import { captureSessionToWorkboard } from "../../lib/workboard/index.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
-import { renderSessions, type SessionsProps } from "./view.ts";
+import { renderSessions, type SessionsAgentOption, type SessionsProps } from "./view.ts";
 
 const GROUP_BY_STORAGE_KEY = "openclaw:sessions:group-by";
 
@@ -62,11 +64,13 @@ class SessionsPage extends LitElement {
   @state() private result: SessionsListResult | null = null;
   @state() private loading = false;
   @state() private error: string | null = null;
-  @state() private activeMinutes = "60";
-  @state() private limit = "50";
+  @state() private activeMinutes = "";
+  @state() private limit = "";
   @state() private includeGlobal = true;
-  @state() private includeUnknown = false;
+  @state() private includeUnknown = true;
   @state() private showArchived = false;
+  /** Empty = all agents (server-side). Local to this page; does not change chat agent. */
+  @state() private filterAgentId = "";
   @state() private searchQuery = "";
   @state() private sortColumn: "key" | "kind" | "updated" | "tokens" = "updated";
   @state() private sortDir: "asc" | "desc" = "desc";
@@ -87,6 +91,7 @@ class SessionsPage extends LitElement {
   private stopSessionSubscription?: () => void;
   private stopAgentIdentitySubscription?: () => void;
   private stopAgentSelectionSubscription?: () => void;
+  private stopAgentsSubscription?: () => void;
   private stopGatewaySubscription?: () => void;
   private stopRuntimeConfigSubscription?: () => void;
   private stopWorkboardSubscription?: () => void;
@@ -102,6 +107,10 @@ class SessionsPage extends LitElement {
   private sharedSessionsLoading = false;
   private gatewayClient: GatewayBrowserClient | null = null;
   private gatewayConnected = false;
+  private searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+  private static readonly SEARCH_DEBOUNCE_MS = 250;
+  /** Grouping needs a wider roster; keep paging when grouping is off. */
+  private static readonly GROUP_FETCH_LIMIT = 500;
 
   override createRenderRoot() {
     return this;
@@ -111,6 +120,7 @@ class SessionsPage extends LitElement {
     super.connectedCallback();
     this.startSessionState();
     this.startAgentIdentityState();
+    this.startAgentsState();
   }
 
   override willUpdate(changed: Map<PropertyKey, unknown>) {
@@ -122,6 +132,7 @@ class SessionsPage extends LitElement {
   override updated() {
     this.startSessionState();
     this.startAgentIdentityState();
+    this.startAgentsState();
     this.startApplicationState();
   }
 
@@ -132,12 +143,18 @@ class SessionsPage extends LitElement {
     this.stopAgentIdentitySubscription = undefined;
     this.stopAgentSelectionSubscription?.();
     this.stopAgentSelectionSubscription = undefined;
+    this.stopAgentsSubscription?.();
+    this.stopAgentsSubscription = undefined;
     this.stopGatewaySubscription?.();
     this.stopGatewaySubscription = undefined;
     this.stopRuntimeConfigSubscription?.();
     this.stopRuntimeConfigSubscription = undefined;
     this.stopWorkboardSubscription?.();
     this.stopWorkboardSubscription = undefined;
+    if (this.searchDebounceTimer) {
+      clearTimeout(this.searchDebounceTimer);
+      this.searchDebounceTimer = null;
+    }
     this.sessionRequestId += 1;
     this.checkpointRequestId += 1;
     this.sessionReloadQueued = false;
@@ -179,6 +196,15 @@ class SessionsPage extends LitElement {
     this.stopAgentIdentitySubscription = context.agentIdentity.subscribe(() =>
       this.requestUpdate(),
     );
+  }
+
+  private startAgentsState() {
+    const context = this.context;
+    if (!context || this.stopAgentsSubscription) {
+      return;
+    }
+    this.stopAgentsSubscription = context.agents.subscribe(() => this.requestUpdate());
+    void context.agents.ensureList().catch(() => undefined);
   }
 
   private startApplicationState() {
@@ -258,32 +284,38 @@ class SessionsPage extends LitElement {
       this.page = 0;
       this.selectedKeys = new Set();
     } else {
-      this.activeMinutes = "60";
-      this.limit = "50";
+      // Full roster with server-side paging/search — not a 60m/50-row local window.
+      this.activeMinutes = "";
+      this.limit = "";
       this.includeGlobal = true;
-      this.includeUnknown = false;
+      this.includeUnknown = true;
     }
     this.expandedSessionKey = data.expandedSessionKey;
     // Only route-driven expansion narrows the list query; interactive drawer
     // opens must keep loading the full roster (see sessionListOptions).
     this.deepLinkSessionKey = data.expandedSessionKey;
     const gateway = context.gateway.snapshot;
+    // Always re-list with the page's own filter state. The route loader used to
+    // preload with activeMinutes=60/limit=50, which made "All sessions" show an
+    // empty table until the user clicked "Show all" — even after the page
+    // cleared those filters in UI state.
+    this.routeDataEnabled = false;
+    this.error = data.error;
+    const sharedSessions = context.sessions.state;
+    this.ignorePendingSharedRefresh = sharedSessions.loading;
     if (data.client !== gateway.client || data.connected !== gateway.connected) {
-      this.routeDataEnabled = false;
       void this.loadSessions();
       if (data.expandedSessionKey) {
         void this.loadCheckpoint(data.expandedSessionKey);
       }
       return;
     }
+    // Seed with route payload for instant paint, then refresh with page filters.
     this.result = data.result
       ? filterSessionRows(data.result, { showArchived: data.showArchived })
       : null;
-    this.error = data.error;
-    this.loading = false;
-    const sharedSessions = context.sessions.state;
-    this.ignorePendingSharedRefresh = sharedSessions.loading;
     this.ensureAgentIdentities(this.result);
+    void this.loadSessions();
     if (data.expandedSessionKey) {
       void this.loadCheckpoint(data.expandedSessionKey);
     }
@@ -329,15 +361,77 @@ class SessionsPage extends LitElement {
     // Narrow the query only for a route deep link (?session=...); an open
     // drawer is pure UI state and must not filter subsequent reloads.
     const deepLinkKey = this.deepLinkSessionKey;
+    if (deepLinkKey) {
+      return {
+        activeMinutes: 0,
+        limit: 50,
+        search: deepLinkKey,
+        includeGlobal: true,
+        includeUnknown: true,
+        showArchived: this.showArchived,
+        agentId: this.sessionAgentId(deepLinkKey),
+      };
+    }
+
+    const search = this.searchQuery.trim();
+    const groupingActive = this.groupBy !== "none";
+    // Search must hit the full store (not the "updated within N minutes" window).
+    // Archived-only mode also needs an unscoped time window.
+    const activeMinutes = search || this.showArchived ? 0 : parseFilterInteger(this.activeMinutes);
+    // Server-side paging: one page per request. Grouping needs a wider roster so
+    // sections are complete; optional Limit filter still caps that window.
+    const pageLimit = groupingActive
+      ? Math.min(
+          SessionsPage.GROUP_FETCH_LIMIT,
+          parseFilterInteger(this.limit) ?? SessionsPage.GROUP_FETCH_LIMIT,
+        )
+      : this.pageSize;
+    const offset = groupingActive ? 0 : this.page * this.pageSize;
+    const filterAgentId = this.filterAgentId.trim();
     return {
-      activeMinutes: deepLinkKey || this.showArchived ? 0 : parseFilterInteger(this.activeMinutes),
-      limit: deepLinkKey ? 50 : parseFilterInteger(this.limit),
-      search: deepLinkKey ?? undefined,
-      includeGlobal: deepLinkKey ? true : this.includeGlobal,
-      includeUnknown: deepLinkKey ? true : this.includeUnknown,
+      activeMinutes,
+      limit: pageLimit,
+      offset,
+      search: search || undefined,
+      includeGlobal: this.includeGlobal,
+      includeUnknown: this.includeUnknown,
       showArchived: this.showArchived,
-      ...(deepLinkKey ? { agentId: this.sessionAgentId(deepLinkKey) } : {}),
+      ...(filterAgentId ? { agentId: normalizeAgentId(filterAgentId) } : {}),
     };
+  }
+
+  private resolveAgentFilterOptions(): SessionsAgentOption[] {
+    const context = this.context;
+    if (!context) {
+      return [];
+    }
+    const sessionKey =
+      this.deepLinkSessionKey ||
+      this.expandedSessionKey ||
+      context.gateway.snapshot.sessionKey ||
+      buildAgentMainSessionKey({
+        agentId:
+          context.agentSelection.state.selectedId ??
+          context.gateway.snapshot.assistantAgentId ??
+          "main",
+      });
+    return resolveSessionAgentFilterOptions({
+      agentsList: context.agents.state.agentsList,
+      sessionsResult: this.result ?? context.sessions.state.result,
+      sessionKey,
+    });
+  }
+
+  private setFilterAgentId(agentId: string) {
+    const next = agentId.trim() ? normalizeAgentId(agentId) : "";
+    if (next === this.filterAgentId) {
+      return;
+    }
+    this.filterAgentId = next;
+    this.page = 0;
+    this.selectedKeys = new Set();
+    this.deepLinkSessionKey = null;
+    void this.loadSessions();
   }
 
   private async loadSessions() {
@@ -519,12 +613,18 @@ class SessionsPage extends LitElement {
   }
 
   private setGroupBy(mode: SessionsGroupBy) {
+    if (mode === this.groupBy) {
+      return;
+    }
     this.groupBy = mode;
+    this.page = 0;
     try {
       getSafeLocalStorage()?.setItem(GROUP_BY_STORAGE_KEY, mode);
     } catch {
       // ignore storage failures
     }
+    // Grouping uses a wider fetch window; flat list uses server page size/offset.
+    void this.loadSessions();
   }
 
   private rememberCustomGroup(name: string) {
@@ -759,6 +859,8 @@ class SessionsPage extends LitElement {
         includeGlobal: this.includeGlobal,
         includeUnknown: this.includeUnknown,
         showArchived: this.showArchived,
+        filterAgentId: this.filterAgentId,
+        agentOptions: this.resolveAgentFilterOptions(),
         mainKey: resolveUiConfiguredMainKey({
           agentsList: context.agents.state.agentsList,
           hello: context.gateway.snapshot.hello,
@@ -786,20 +888,35 @@ class SessionsPage extends LitElement {
         checkpointErrorByKey: this.checkpointErrorByKey,
         onFiltersChange: (next) => this.updateFilters(next),
         onClearFilters: () => {
+          if (this.searchDebounceTimer) {
+            clearTimeout(this.searchDebounceTimer);
+            this.searchDebounceTimer = null;
+          }
           this.activeMinutes = "";
           this.limit = "";
           this.includeGlobal = true;
           this.includeUnknown = true;
           this.showArchived = false;
+          this.filterAgentId = "";
           this.searchQuery = "";
           this.page = 0;
           this.selectedKeys = new Set();
           this.deepLinkSessionKey = null;
           void this.loadSessions();
         },
+        onFilterAgentChange: (agentId) => this.setFilterAgentId(agentId),
         onSearchChange: (query) => {
           this.searchQuery = query;
           this.page = 0;
+          this.selectedKeys = new Set();
+          this.deepLinkSessionKey = null;
+          if (this.searchDebounceTimer) {
+            clearTimeout(this.searchDebounceTimer);
+          }
+          this.searchDebounceTimer = setTimeout(() => {
+            this.searchDebounceTimer = null;
+            void this.loadSessions();
+          }, SessionsPage.SEARCH_DEBOUNCE_MS);
         },
         onSortChange: (column, direction) => {
           this.sortColumn = column;
@@ -810,11 +927,21 @@ class SessionsPage extends LitElement {
         onAssignCategory: (key, category) => this.assignCategory(key, category),
         onRequestNewCategory: (sessionKey) => this.requestNewCategory(sessionKey),
         onPageChange: (page) => {
+          if (page === this.page) {
+            return;
+          }
           this.page = page;
+          this.selectedKeys = new Set();
+          void this.loadSessions();
         },
         onPageSizeChange: (pageSize) => {
+          if (pageSize === this.pageSize) {
+            return;
+          }
           this.pageSize = pageSize;
           this.page = 0;
+          this.selectedKeys = new Set();
+          void this.loadSessions();
         },
         onRefresh: () => void this.loadSessions(),
         onPatch: (key, patch) => void this.patchSession(key, patch),

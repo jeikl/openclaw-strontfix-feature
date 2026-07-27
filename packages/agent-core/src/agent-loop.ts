@@ -81,10 +81,43 @@ function resolveAssistantMessageUpdate(
   return currentMessage;
 }
 
+/**
+ * Normalize assistant tool-call turns before the loop decides whether to execute.
+ *
+ * Providers occasionally return complete `toolCall` blocks with stopReason
+ * `"stop"` / `"end_turn"` instead of `"toolUse"`. Stripping those calls would
+ * end the loop after intermediate narration ("I'll call a tool…") without ever
+ * running the tools or producing a post-tool answer.
+ *
+ * Incomplete tool blocks on length/error/aborted stays stripped — those cannot
+ * safely execute.
+ */
 function removeNonExecutableToolCalls(message: AssistantMessage): AssistantMessage {
   if (message.stopReason === "toolUse") {
     return message;
   }
+
+  const toolCalls = message.content.filter(
+    (item): item is Extract<(typeof message.content)[number], { type: "toolCall" }> =>
+      item.type === "toolCall",
+  );
+  if (toolCalls.length === 0) {
+    return message;
+  }
+
+  const hasCompleteToolCalls = toolCalls.every(
+    (call) =>
+      typeof call.id === "string" &&
+      call.id.trim().length > 0 &&
+      typeof call.name === "string" &&
+      call.name.trim().length > 0,
+  );
+  // "stop" with complete tool calls still means "run tools then continue".
+  // length/error/aborted keep stripping incomplete tool blocks.
+  if (hasCompleteToolCalls && message.stopReason === "stop") {
+    return { ...message, stopReason: "toolUse" };
+  }
+
   const content = message.content.filter((item) => item.type !== "toolCall");
   return content.length === message.content.length ? message : { ...message, content };
 }

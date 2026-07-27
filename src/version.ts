@@ -4,7 +4,8 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 
 // oxlint-disable-next-line eslint/no-underscore-dangle -- Bundled builds replace this compile-time define identifier.
 declare const __OPENCLAW_VERSION__: string | undefined;
-const CORE_PACKAGE_NAME = "openclaw";
+/** Upstream package name and published forks (e.g. jeikclaw). */
+const CORE_PACKAGE_NAMES = new Set(["openclaw", "jeikclaw"]);
 
 const PACKAGE_JSON_CANDIDATES = [
   "../package.json",
@@ -18,6 +19,11 @@ const BUILD_INFO_CANDIDATES = [
   "../../build-info.json",
   "./build-info.json",
 ] as const;
+
+function isCorePackageName(name: string | undefined): boolean {
+  const normalized = normalizeOptionalString(name);
+  return Boolean(normalized && CORE_PACKAGE_NAMES.has(normalized));
+}
 
 function readVersionFromJsonCandidates(
   moduleUrl: string,
@@ -33,7 +39,9 @@ function readVersionFromJsonCandidates(
         if (!version) {
           continue;
         }
-        if (opts.requirePackageName && parsed.name !== CORE_PACKAGE_NAME) {
+        // Reject random nested package.json files, but accept renames/forks of
+        // the core CLI package (openclaw → jeikclaw, etc.).
+        if (opts.requirePackageName && !isCorePackageName(parsed.name)) {
           continue;
         }
         return version;

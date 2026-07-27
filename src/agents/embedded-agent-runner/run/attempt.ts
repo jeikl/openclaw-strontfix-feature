@@ -5861,6 +5861,7 @@ export async function runEmbeddedAttempt(
         silentExpected: params.silentExpected,
         emptyAssistantReplyIsSilent,
         lastAssistantStopReason: lastAssistant?.stopReason,
+        lastAssistantVisibleText: resolveFinalAssistantVisibleText(lastAssistant),
         hasTerminalOutput,
       });
       trajectoryRecorder?.recordEvent("model.completed", {

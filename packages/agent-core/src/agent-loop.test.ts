@@ -341,6 +341,99 @@ describe("agentLoop streaming updates", () => {
       content: expect.arrayContaining([expect.objectContaining({ type: "toolCall" })]),
     });
   });
+
+  it("executes complete tool calls even when the provider marks stopReason stop", async () => {
+    // Some providers emit full toolCall blocks with stopReason "stop" instead of
+    // "toolUse". Those must still run and continue — otherwise intermediate
+    // narration becomes the final answer.
+    const executed: string[] = [];
+    let turn = 0;
+    const streamFn: StreamFn = () => {
+      turn += 1;
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        if (turn === 1) {
+          const message: AssistantMessage = {
+            role: "assistant",
+            content: [
+              { type: "text", text: "好的 我开始调用工具" },
+              {
+                type: "toolCall",
+                id: "call-read",
+                name: "read",
+                arguments: { path: "a.txt" },
+              },
+            ],
+            api: model.api,
+            provider: model.provider,
+            model: model.id,
+            usage: TEST_USAGE,
+            stopReason: "stop",
+            timestamp: 1,
+          };
+          stream.push({ type: "done", reason: "stop", message });
+        } else {
+          const message: AssistantMessage = {
+            role: "assistant",
+            content: [{ type: "text", text: "工具结果已整理" }],
+            api: model.api,
+            provider: model.provider,
+            model: model.id,
+            usage: TEST_USAGE,
+            stopReason: "stop",
+            timestamp: 2,
+          };
+          stream.push({ type: "done", reason: "stop", message });
+        }
+        stream.end();
+      });
+      return stream;
+    };
+
+    const stream = agentLoop(
+      [{ role: "user", content: "read a.txt", timestamp: 1 }],
+      {
+        systemPrompt: "",
+        messages: [],
+        tools: [
+          {
+            name: "read",
+            label: "read",
+            description: "Read a file",
+            parameters: Type.Object({}, { additionalProperties: true }),
+            execute: async () => {
+              executed.push("read");
+              return {
+                content: [{ type: "text", text: "file contents" }],
+                details: {},
+              };
+            },
+          },
+        ],
+      },
+      config,
+      undefined,
+      streamFn,
+    );
+
+    const events = await collectEvents(stream);
+    const messages = await stream.result();
+
+    expect(executed).toEqual(["read"]);
+    expect(events.some((event) => event.type === "tool_execution_start")).toBe(true);
+    expect(messages.map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+      "toolResult",
+      "assistant",
+    ]);
+    expect(messages[1]).toMatchObject({ role: "assistant", stopReason: "toolUse" });
+    expect(messages[3]).toMatchObject({
+      role: "assistant",
+      stopReason: "stop",
+      content: [{ type: "text", text: "工具结果已整理" }],
+    });
+  });
 });
 
 describe("runAgentLoop deferred tool hydration", () => {
@@ -751,7 +844,10 @@ describe("runAgentLoop deferred tool hydration", () => {
 });
 
 describe("agentLoop tool termination", () => {
-  function makeAssistantMessage(content: AssistantMessage["content"]): AssistantMessage {
+  function makeAssistantMessage(
+    content: AssistantMessage["content"],
+    stopReason?: AssistantMessage["stopReason"],
+  ): AssistantMessage {
     return {
       role: "assistant",
       content,
@@ -766,7 +862,8 @@ describe("agentLoop tool termination", () => {
         totalTokens: 0,
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
       },
-      stopReason: content.some((item) => item.type === "toolCall") ? "toolUse" : "stop",
+      stopReason:
+        stopReason ?? (content.some((item) => item.type === "toolCall") ? "toolUse" : "stop"),
       timestamp: 1,
     };
   }

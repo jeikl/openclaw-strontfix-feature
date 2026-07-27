@@ -2026,11 +2026,14 @@ function migrateLegacyUpdateCheckState(params: {
             .where("state_key", "=", UPDATE_CHECK_STATE_KEY),
         );
         if (existing) {
-          if (legacyUpdateCheckStateMatches(existing, state)) {
-            shouldArchive = true;
-          } else {
-            warnings.push(
-              `Left legacy update-check state in place because shared SQLite state already differs: ${params.detected.sourcePath}`,
+          // SQLite is the source of truth after the first successful import.
+          // Matching legacy files can be archived silently; differing ones are
+          // still archived so repeated startups do not hard-fail on a stale
+          // update-check.json left beside a newer shared row.
+          shouldArchive = true;
+          if (!legacyUpdateCheckStateMatches(existing, state)) {
+            changes.push(
+              `Archived legacy update-check state (shared SQLite already has a different row): ${params.detected.sourcePath}`,
             );
           }
           return;

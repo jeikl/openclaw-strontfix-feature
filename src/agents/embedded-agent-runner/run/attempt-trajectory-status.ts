@@ -46,6 +46,8 @@ export type ResolveAttemptTrajectoryTerminalParams = {
   silentExpected?: boolean;
   emptyAssistantReplyIsSilent?: boolean;
   lastAssistantStopReason?: string;
+  /** Visible text on the terminal assistant message (post-tool answer when tools ran). */
+  lastAssistantVisibleText?: string;
   hasTerminalOutput?: boolean;
 };
 
@@ -142,11 +144,40 @@ export function resolveAttemptTrajectoryTerminal(
     };
   }
 
+  // Tools ran, stopReason is stop, but the *terminal* assistant message has no
+  // visible answer — only pre-tool planning text lives in assistantTexts.
+  // That is not a successful final delivery (channels would otherwise finalize
+  // "OK, I'll call the tool" as the end card).
+  const lastAssistantHasVisibleAnswer =
+    typeof params.lastAssistantVisibleText === "string" &&
+    params.lastAssistantVisibleText.trim().length > 0;
+  const toolsRanWithoutPostToolAnswer =
+    (params.toolMetas?.length ?? 0) > 0 &&
+    !params.hasTerminalOutput &&
+    !hasExplicitTerminalDelivery &&
+    params.lastAssistantStopReason === "stop" &&
+    !lastAssistantHasVisibleAnswer &&
+    params.synthesizedPayloadCount === 0 &&
+    params.successfulCronAdds === 0;
+  if (toolsRanWithoutPostToolAnswer) {
+    return {
+      status: "error",
+      terminalError: NON_DELIVERABLE_TERMINAL_TURN_REASON,
+    };
+  }
+
+  // When tools ran, pre-tool planning text alone is not deliverable progress —
+  // require the terminal assistant answer (or another explicit signal above).
+  const hasAssistantDeliverable =
+    (params.toolMetas?.length ?? 0) > 0
+      ? lastAssistantHasVisibleAnswer
+      : hasNonEmptyAssistantText(params.assistantTexts);
+
   const hasDeliverableOrProgress =
     hasExplicitTerminalDelivery ||
     params.hasTerminalOutput ||
     params.synthesizedPayloadCount > 0 ||
-    hasNonEmptyAssistantText(params.assistantTexts) ||
+    hasAssistantDeliverable ||
     params.successfulCronAdds > 0;
 
   if (hasDeliverableOrProgress) {

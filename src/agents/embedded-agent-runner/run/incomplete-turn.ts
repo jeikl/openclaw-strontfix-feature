@@ -99,11 +99,27 @@ export function isIncompleteTerminalAssistantTurn(params: {
   hasAssistantVisibleText: boolean;
   hasTerminalOutput?: boolean;
   lastAssistant?: { stopReason?: string } | null;
+  /** True when this attempt executed at least one tool. */
+  hadToolActivity?: boolean;
 }): boolean {
   const stopReason = params.lastAssistant?.stopReason;
   // Tool-use expects a post-tool continuation; length means the output budget
   // ended before a complete final answer. Partial visible text completes neither.
-  return stopReason === "toolUse" || (stopReason === "length" && !params.hasTerminalOutput);
+  if (stopReason === "toolUse" || (stopReason === "length" && !params.hasTerminalOutput)) {
+    return true;
+  }
+  // Tools ran, but the terminal assistant turn has no post-tool answer — only
+  // pre-tool narration was visible. Treat as incomplete so callers retry /
+  // surface a warning instead of finalizing "好的 我开始调用工具".
+  if (
+    params.hadToolActivity === true &&
+    !params.hasTerminalOutput &&
+    stopReason === "stop" &&
+    !params.hasAssistantVisibleText
+  ) {
+    return true;
+  }
+  return false;
 }
 
 const GEMINI_INCOMPLETE_TURN_PROVIDER_IDS = new Set([
@@ -233,12 +249,31 @@ export function resolveIncompleteTurnPayloadText(params: {
   // still point at the pre-tool turn after a post-tool answer completes. (#80918)
   const assistant = params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant;
   const hasTerminalOutput = hasAttemptTerminalState(params.attempt);
+  const hadToolActivity = (params.attempt.toolMetas?.length ?? 0) > 0;
+  const terminalStopReason = assistant?.stopReason;
+  // Pre-tool planning streamed as interim payloads is not a completed answer
+  // once tools have run without a post-tool terminal answer.
+  const onlyPreToolPayloadsAfterTools =
+    hadToolActivity &&
+    params.payloadCount !== 0 &&
+    !hasTerminalOutput &&
+    (terminalStopReason === "toolUse" || terminalStopReason === "stop") &&
+    !params.attempt.clientToolCalls &&
+    !params.attempt.yieldDetected &&
+    !params.attempt.didSendDeterministicApprovalPrompt &&
+    !params.attempt.lastToolError &&
+    !hasCommittedMessagingToolDeliveryEvidence(params.attempt) &&
+    !hasAcceptedSessionSpawn(params.attempt.acceptedSessionSpawns) &&
+    !hasAsyncStartedToolActivity(params.attempt.toolMetas);
   // Tool-use expects a post-tool continuation, while length means the output
   // budget ended. Partial visible text completes neither. (#76477)
+  // When only pre-tool payloads exist after tools, do not treat payloadCount as
+  // a completed answer either.
   const incompleteTerminalAssistant = isIncompleteTerminalAssistantTurn({
-    hasAssistantVisibleText: params.payloadCount > 0,
+    hasAssistantVisibleText: params.payloadCount > 0 && !onlyPreToolPayloadsAfterTools,
     hasTerminalOutput,
     lastAssistant: assistant,
+    hadToolActivity,
   });
   // Thinking payloads can count toward payloadCount but carry no user-visible
   // content; bypass the visible-text guard when thinking was the only output
@@ -250,7 +285,10 @@ export function resolveIncompleteTurnPayloadText(params: {
     Boolean(assistant && hasOnlyAssistantReasoningContent(assistant));
 
   if (
-    (params.payloadCount !== 0 && !incompleteTerminalAssistant && !thinkingOnlyTerminal) ||
+    (params.payloadCount !== 0 &&
+      !incompleteTerminalAssistant &&
+      !thinkingOnlyTerminal &&
+      !onlyPreToolPayloadsAfterTools) ||
     (params.aborted && params.externalAbort) ||
     params.timedOut ||
     params.attempt.clientToolCalls ||

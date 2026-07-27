@@ -12,20 +12,26 @@ function routeOptions(location: RouteLocation) {
   return { expandedSessionKey, showArchived };
 }
 
+/** Default page size for the sessions roster (matches sessions-page pageSize). */
+const SESSIONS_ROUTE_PAGE_SIZE = 25;
+
 async function loadSessionsRoute(
   context: ApplicationContext,
   location: RouteLocation,
 ): Promise<SessionsRouteData> {
   const options = routeOptions(location);
   const checkpointAgentId = parseAgentSessionKey(options.expandedSessionKey)?.agentId;
+  // Deep-link a single session: search by key, full time window.
+  // Browse "all sessions": full store roster (no 60m/50 cap) — the page owns filters after load.
+  const deepLink = Boolean(options.expandedSessionKey);
   const [sessions] = await Promise.all([
     context.sessions
       .list({
-        activeMinutes: options.expandedSessionKey || options.showArchived ? 0 : 60,
-        limit: 50,
+        activeMinutes: 0,
+        limit: deepLink ? 50 : SESSIONS_ROUTE_PAGE_SIZE,
         search: options.expandedSessionKey ?? undefined,
         includeGlobal: true,
-        includeUnknown: Boolean(options.expandedSessionKey),
+        includeUnknown: true,
         showArchived: options.showArchived,
         ...(checkpointAgentId ? { agentId: checkpointAgentId } : {}),
       })

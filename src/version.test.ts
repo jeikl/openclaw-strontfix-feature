@@ -68,6 +68,15 @@ describe("version resolution", () => {
     });
   });
 
+  it("resolves package version when the core package is renamed to jeikclaw", async () => {
+    await withVersionFixtureDir(async (root) => {
+      await writeJsonFixture(root, "package.json", { name: "jeikclaw", version: "2026.7.742" });
+      const moduleUrl = await ensureModuleFixture(root);
+      expect(readVersionFromPackageJsonForModuleUrl(moduleUrl)).toBe("2026.7.742");
+      expect(resolveVersionFromModuleUrl(moduleUrl)).toBe("2026.7.742");
+    });
+  });
+
   it("ignores unrelated nearby package.json files", async () => {
     await withVersionFixtureDir(async (root) => {
       await writeJsonFixture(root, "package.json", { name: "openclaw", version: "2.3.4" });

@@ -13,16 +13,24 @@ function buildResult(
     ts: Date.now(),
     path: "(multiple)",
     count: 1,
+    totalCount: 1,
+    hasMore: false,
     defaults: { modelProvider: null, model: null, contextTokens: null, ...defaults },
     sessions: [session],
   };
 }
 
-function buildMultiResult(sessions: SessionsListResult["sessions"]): SessionsListResult {
+function buildMultiResult(
+  sessions: SessionsListResult["sessions"],
+  extras?: Partial<Pick<SessionsListResult, "totalCount" | "hasMore" | "nextOffset">>,
+): SessionsListResult {
   return {
     ts: Date.now(),
     path: "(multiple)",
     count: sessions.length,
+    totalCount: extras?.totalCount ?? sessions.length,
+    hasMore: extras?.hasMore ?? false,
+    nextOffset: extras?.nextOffset,
     defaults: { modelProvider: null, model: null, contextTokens: null },
     sessions,
   };
@@ -38,6 +46,11 @@ function buildProps(result: SessionsListResult): SessionsProps {
     includeGlobal: false,
     includeUnknown: false,
     showArchived: false,
+    filterAgentId: "",
+    agentOptions: [
+      { id: "main", label: "main" },
+      { id: "guide", label: "guide" },
+    ],
     mainKey: "main",
     basePath: "",
     searchQuery: "",
@@ -56,6 +69,7 @@ function buildProps(result: SessionsListResult): SessionsProps {
     checkpointErrorByKey: {},
     onFiltersChange: () => undefined,
     onClearFilters: () => undefined,
+    onFilterAgentChange: () => undefined,
     onSearchChange: () => undefined,
     onSortChange: () => undefined,
     onGroupByChange: () => undefined,
@@ -368,8 +382,9 @@ describe("sessions view", () => {
 
     expect(activeField?.querySelector(".session-filter-label")?.textContent).toBe("Updated within");
     expect(tooltips).toEqual([
-      "Loads sessions updated in the last 120 minutes.",
-      "Max sessions to load.",
+      "Show sessions for one agent, or all agents. Does not change the sidebar chat agent until you open a session.",
+      "Only sessions updated in the last 120 minutes. Leave empty to search/browse the full store.",
+      "Optional cap when grouping. Flat list paging uses the page size control below.",
       "Include global sessions.",
       "Include unknown sessions.",
       "Show only archived sessions.",
@@ -1160,22 +1175,23 @@ describe("sessions view", () => {
     const onSelectPage = vi.fn();
     const onDeselectPage = vi.fn();
     const onDeselectAll = vi.fn();
+    // Server-side paging: the current result is one page of rows. Select-all
+    // only toggles keys on this page, not off-page selections still held in state.
     render(
       renderSessions({
         ...buildProps(
-          buildMultiResult([
-            {
-              key: "page-0",
-              kind: "direct",
-              updatedAt: 20,
-            },
-            {
-              key: "page-1",
-              kind: "direct",
-              updatedAt: 10,
-            },
-          ]),
+          buildMultiResult(
+            [
+              {
+                key: "page-0",
+                kind: "direct",
+                updatedAt: 20,
+              },
+            ],
+            { totalCount: 2, hasMore: true, nextOffset: 1 },
+          ),
         ),
+        page: 0,
         pageSize: 1,
         selectedKeys: new Set(["page-0", "off-page"]),
         onSelectPage,
