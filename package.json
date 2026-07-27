@@ -1,6 +1,9 @@
 {
   "name": "jeikclaw",
   "version": "2026.7.743",
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/"
+  },
   "description": "Multi-channel AI gateway with extensible messaging integrations",
   "keywords": [],
   "homepage": "https://github.com/openclaw/openclaw#readme",
