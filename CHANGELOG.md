@@ -2,6 +2,28 @@
 
 Docs: https://docs.openclaw.ai
 
+## 2026.7.743
+
+### Highlights
+
+- **Agent loop continuity:** recover intermittent early stops after tool calls so runs continue from complete tool results instead of finalizing intermediate narration such as “OK, I'll start calling tools”.
+- **Control UI sessions:** full-store session search with server-side paging, an agent filter on the Sessions page, and reliable “All sessions” loading without requiring “Show all” first.
+- **Fork package versioning:** treat `jeikclaw` as a core package name when resolving runtime version so local and published CLI binaries report `2026.7.743` instead of `0.0.0`.
+
+### Changes
+
+- **Sessions search & paging:** `sessions.list` search uses the full store (not the current page); default filters no longer trap the roster in a 60-minute / 50-row window; route loader and page re-list stay aligned.
+- **Sessions agent filter:** add an Agent dropdown on the Sessions page (`All agents` or a specific agent) without forcing a sidebar agent switch first.
+- **Sessions UI theme:** fix dark/light readability for agent and related native select dropdowns (`color-scheme` + explicit option colors).
+- **State migration:** archive conflicting legacy `update-check.json` when shared SQLite already has a different row so gateway startup is not blocked repeatedly.
+
+### Fixes
+
+- **Agent loop:** promote complete `toolCall` blocks with provider `stopReason: "stop"` to executable `toolUse` turns so tools still run and the loop continues.
+- **Terminal success criteria:** do not treat pre-tool planning text alone as a successful final answer after tools ran; mark non-deliverable / incomplete when post-tool visible answer is missing.
+- **Incomplete-turn recovery:** keep tool-after-narration stalls on the incomplete path instead of silently finalizing intermediate text.
+- **Version gate:** accept package name `jeikclaw` in binary version resolution so upgrades from older configs can start under the fork CLI.
+
 ## 2026.7.742
 
 - **Misc:** Preparation for npm release.
