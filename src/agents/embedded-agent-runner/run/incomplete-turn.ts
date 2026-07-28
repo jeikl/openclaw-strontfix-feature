@@ -61,7 +61,7 @@ type IncompleteTurnAttempt = Pick<
   | "timedOutDuringCompaction"
   | "toolMetas"
 > &
-  Partial<Pick<EmbeddedRunAttemptResult, "acceptedSessionSpawns">>;
+  Partial<Pick<EmbeddedRunAttemptResult, "acceptedSessionSpawns" | "messagesSnapshot">>;
 
 function hasPositiveOutputTokenUsage(message: AgentMessage | null): boolean {
   if (!message || typeof message !== "object") {
@@ -253,11 +253,18 @@ export function resolveIncompleteTurnPayloadText(params: {
   const terminalStopReason = assistant?.stopReason;
   // Pre-tool planning streamed as interim payloads is not a completed answer
   // once tools have run without a post-tool terminal answer.
+  // When currentAttemptAssistant is a real stop/end_turn answer, payloads are the
+  // post-tool final — do not treat them as pre-tool-only (#80918).
+  const currentAttemptStopIsPostToolAnswer =
+    params.attempt.currentAttemptAssistant != null &&
+    (params.attempt.currentAttemptAssistant.stopReason === "stop" ||
+      params.attempt.currentAttemptAssistant.stopReason === "end_turn");
   const onlyPreToolPayloadsAfterTools =
     hadToolActivity &&
     params.payloadCount !== 0 &&
     !hasTerminalOutput &&
-    (terminalStopReason === "toolUse" || terminalStopReason === "stop") &&
+    (terminalStopReason === "toolUse" ||
+      (terminalStopReason === "stop" && !currentAttemptStopIsPostToolAnswer)) &&
     !params.attempt.clientToolCalls &&
     !params.attempt.yieldDetected &&
     !params.attempt.didSendDeterministicApprovalPrompt &&
@@ -300,6 +307,11 @@ export function resolveIncompleteTurnPayloadText(params: {
   }
 
   if (hasOnlySilentAssistantReply(params.attempt.assistantTexts)) {
+    return null;
+  }
+
+  // Cron quiet tool success (exact NO_REPLY tool result) is intentional silence.
+  if (hasTrailingSilentToolResult(params.attempt.messagesSnapshot ?? [])) {
     return null;
   }
 
@@ -661,16 +673,75 @@ function shouldSkipNonVisibleTurnRetry(params: {
   timedOut: boolean;
   attempt: IncompleteTurnAttempt;
 }): boolean {
+  // Do NOT skip solely because tools ran (hadPotentialSideEffects). Continuation
+  // retries only append a "produce the visible answer now" instruction and reuse
+  // the existing transcript — they do not re-execute prior tools. Blocking them
+  // after image/exec/etc. causes incomplete_turn error finals while the model
+  // simply failed to emit post-tool user text (common with newapi after vision).
+  // Still skip when a committed user-facing delivery already completed the turn
+  // (messaging send / spawn / approval / active client tools / aborts).
   return Boolean(
     params.aborted ||
     params.timedOut ||
     params.attempt.clientToolCalls ||
     params.attempt.yieldDetected ||
     params.attempt.didSendDeterministicApprovalPrompt ||
-    params.attempt.lastToolError ||
+    // Abnormal tool failures may need verify paths; successful tool results stay retryable.
+    (params.attempt.lastToolError &&
+      (params.attempt.lastToolError.timedOut === true ||
+        params.attempt.lastToolError.middlewareError === true)) ||
     hasAcceptedSessionSpawn(params.attempt.acceptedSessionSpawns) ||
-    resolveAttemptReplayMetadata(params.attempt).hadPotentialSideEffects,
+    // Message tool already delivered to the user — do not re-prompt for another answer.
+    hasMessagingToolDeliveryEvidence(params.attempt),
   );
+}
+
+/**
+ * Tools finished but the model never produced a post-tool user-visible answer.
+ * - No assistant prose at all after tools (payloads=0, stop/end_turn/toolUse)
+ * - Or terminal is still toolUse while only pre-tool narration was streamed
+ *
+ * Do NOT treat a normal post-tool `stop` with assistant text as missing — that is
+ * a completed answer even when tools also ran earlier in the turn.
+ */
+function isPostToolMissingVisibleAnswer(params: {
+  payloadCount: number;
+  attempt: IncompleteTurnAttempt;
+}): boolean {
+  const hadToolActivity = (params.attempt.toolMetas?.length ?? 0) > 0;
+  if (!hadToolActivity) {
+    return false;
+  }
+  if (hasAttemptTerminalState(params.attempt)) {
+    return false;
+  }
+  if (hasAsyncStartedToolActivity(params.attempt.toolMetas)) {
+    return false;
+  }
+  const assistant = params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant;
+  const stopReason = assistant?.stopReason;
+  if (
+    stopReason !== "stop" &&
+    stopReason !== "toolUse" &&
+    stopReason !== "end_turn" &&
+    stopReason !== undefined
+  ) {
+    return false;
+  }
+  // Cron quiet success: exact NO_REPLY tool result is intentional silence, not a stall.
+  if (hasTrailingSilentToolResult(params.attempt.messagesSnapshot)) {
+    return false;
+  }
+  const hasAssistantProse = joinAssistantTexts(params.attempt.assistantTexts).length > 0;
+  if (!hasAssistantProse) {
+    // Image/tool completed, model returned empty stop — continue once.
+    return (
+      stopReason === "stop" || stopReason === "end_turn" || stopReason === "toolUse" || !assistant
+    );
+  }
+  // Has streamed text: only missing if the terminal turn is still toolUse
+  // (pre-tool narration only; no post-tool stop answer).
+  return stopReason === "toolUse";
 }
 
 /** Allows configured silent handling for replay-safe empty, reasoning-only, or explicit silent turns. */
@@ -772,17 +843,21 @@ export function resolveEmptyResponseRetryInstruction(params: {
     return null;
   }
 
-  if (
-    !isEmptyResponseAssistantTurn({
-      payloadCount: params.payloadCount,
-      attempt: params.attempt,
-    })
-  ) {
+  const emptyResponse = isEmptyResponseAssistantTurn({
+    payloadCount: params.payloadCount,
+    attempt: params.attempt,
+  });
+  const postToolMissingAnswer = isPostToolMissingVisibleAnswer({
+    payloadCount: params.payloadCount,
+    attempt: params.attempt,
+  });
+  if (!emptyResponse && !postToolMissingAnswer) {
     return null;
   }
 
   const assistant = params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant ?? null;
   if (
+    emptyResponse &&
     assistant?.stopReason === "stop" &&
     OLLAMA_INCOMPLETE_TURN_PROVIDER_ID_PATTERN.test(
       normalizeLowercaseStringOrEmpty(params.provider ?? ""),
@@ -793,6 +868,7 @@ export function resolveEmptyResponseRetryInstruction(params: {
   }
 
   if (
+    postToolMissingAnswer ||
     shouldApplyNonVisibleTurnRetryGuard({
       provider: params.provider,
       modelId: params.modelId,

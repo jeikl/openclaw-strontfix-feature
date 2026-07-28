@@ -284,7 +284,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
 
   it("surfaces the latest tool-authored presentation after a structured incomplete turn", async () => {
     mockedClassifyFailoverReason.mockReturnValue(null);
-    mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams: unknown) => {
+    mockedRunEmbeddedAttempt.mockImplementation(async (attemptParams: unknown) => {
       (
         attemptParams as {
           onToolOutcome?: (observation: {
@@ -337,7 +337,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
 
   it("surfaces read-only cron presentation after a structured incomplete turn", async () => {
     mockedClassifyFailoverReason.mockReturnValue(null);
-    mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams: unknown) => {
+    mockedRunEmbeddedAttempt.mockImplementation(async (attemptParams: unknown) => {
       (
         attemptParams as {
           onToolOutcome?: (observation: {
@@ -1746,7 +1746,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
 
   it("surfaces an error for tool-use terminal turn with pre-tool text via runEmbeddedAgent (#76477)", async () => {
     mockedClassifyFailoverReason.mockReturnValue(null);
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+    // Post-tool missing answer gets one empty-response continuation, then incomplete.
+    mockedRunEmbeddedAttempt.mockResolvedValue(
       makeAttemptResult({
         assistantTexts: ["Initial analysis of the issue..."],
         toolMetas: [{ toolName: "read", meta: "path=src/index.ts" }],
@@ -1769,7 +1770,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       runId: "run-tool-use-dropped-final-text",
     });
 
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(runAttemptCall(1).prompt).toContain(EMPTY_RESPONSE_RETRY_INSTRUCTION);
     expect(result.payloads?.[0]?.isError).toBe(true);
     expect(result.payloads?.[0]?.text).toContain("couldn't generate a response");
     expectWarnMessageWith("incomplete turn detected");
