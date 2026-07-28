@@ -462,11 +462,6 @@ function hasOnlySilentAssistantReply(assistantTexts?: readonly string[]): boolea
   );
 }
 
-/** True if any tool in the attempt started background work (side-effect evidence). */
-function hasAsyncStartedToolActivity(toolMetas?: readonly { asyncStarted?: boolean }[]): boolean {
-  return (toolMetas ?? []).some((entry) => entry.asyncStarted === true);
-}
-
 /**
  * True when background work is still in progress *now*.
  * Only the latest toolMeta with asyncStarted matters: after process poll
@@ -474,6 +469,9 @@ function hasAsyncStartedToolActivity(toolMetas?: readonly { asyncStarted?: boole
  * continuation and incomplete detection may run again. While the latest
  * entry is still asyncStarted ("Command still running" / "Process still
  * running"), suppress incomplete isError finals so DingTalk does not freeze.
+ *
+ * Historical async (any prior asyncStarted) still counts as side-effect via
+ * buildAttemptReplayMetadata — that path intentionally uses .some().
  */
 function hasActiveAsyncBackgroundToolActivity(
   toolMetas?: readonly { asyncStarted?: boolean }[],
