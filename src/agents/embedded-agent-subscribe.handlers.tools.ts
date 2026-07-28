@@ -378,9 +378,35 @@ function applyToolSendReceiptForExtraction(result: unknown, receiptResult: unkno
   };
 }
 
+/**
+ * Detects tool results that start (or re-confirm) background work that continues
+ * after the tool call returns. Incomplete-turn and retry guards treat these as
+ * terminal progress so they do not emit a false "couldn't generate a response"
+ * error final while the work is still running.
+ *
+ * Contracts:
+ * - Media/task start: `{ async: true, status: "started" }`
+ * - Background exec / process session: `{ status: "running", sessionId }`
+ *   (historical shape from bash exec yield — no `async: true`)
+ */
 function isAsyncStartedToolResult(result: unknown): boolean {
   const details = readToolResultDetails(result);
-  return details?.async === true && details.status === "started";
+  if (!details || typeof details.status !== "string") {
+    return false;
+  }
+  const status = details.status.trim().toLowerCase();
+  if (details.async === true && status === "started") {
+    return true;
+  }
+  // Backgrounded shell/process handle: "Command still running (session …)".
+  if (
+    status === "running" &&
+    typeof details.sessionId === "string" &&
+    details.sessionId.trim().length > 0
+  ) {
+    return true;
+  }
+  return false;
 }
 
 function readAsyncStartedTaskIds(result: unknown): {

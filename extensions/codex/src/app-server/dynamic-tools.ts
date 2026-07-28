@@ -1244,9 +1244,33 @@ function isToolResultYield(result: AgentToolResult<unknown>): boolean {
   return details.status.trim().toLowerCase() === "yielded";
 }
 
+/**
+ * Detects tool results that start (or re-confirm) background work that continues
+ * after the tool call returns. Must stay aligned with the embedded agent
+ * `isAsyncStartedToolResult` in handlers.tools.ts so incomplete-turn and
+ * termination do not treat background exec as a failed final.
+ *
+ * Contracts:
+ * - Media/task start: `{ async: true, status: "started" }`
+ * - Background exec / process session: `{ status: "running", sessionId }`
+ */
 function isAsyncStartedToolResult(result: AgentToolResult<unknown>): boolean {
   const details = result.details;
-  return isRecord(details) && details.async === true && details.status === "started";
+  if (!isRecord(details) || typeof details.status !== "string") {
+    return false;
+  }
+  const status = details.status.trim().toLowerCase();
+  if (details.async === true && status === "started") {
+    return true;
+  }
+  if (
+    status === "running" &&
+    typeof details.sessionId === "string" &&
+    details.sessionId.trim().length > 0
+  ) {
+    return true;
+  }
+  return false;
 }
 
 function withDiagnosticTerminalType<T extends CodexDynamicToolCallResponse>(

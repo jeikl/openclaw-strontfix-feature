@@ -2,6 +2,18 @@
 
 Docs: https://docs.openclaw.ai
 
+## 2026.7.744
+
+### Highlights
+
+- **Background exec incomplete-turn:** do not promote a successful `Command still running (session …)` process yield into an error final while the shell session continues.
+
+### Fixes
+
+- **asyncStarted detection:** treat background exec/process results with `status: "running"` + `sessionId` as async progress (same terminal-progress class as media `{ async: true, status: "started" }`), so incomplete-turn does not emit “Agent couldn't generate a response” / `isError` finals that close channel cards (e.g. DingTalk) mid-work.
+- **exec yield contract:** mark backgrounded exec tool results with `async: true` while keeping `status: "running"` for process poll/loop consumers.
+- **Codex dynamic tools:** keep `isAsyncStartedToolResult` aligned with the embedded agent handler so background exec is not mis-classified as a failed terminal.
+
 ## 2026.7.743
 
 ### Highlights

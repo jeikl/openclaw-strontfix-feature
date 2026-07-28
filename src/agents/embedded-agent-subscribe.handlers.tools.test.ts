@@ -863,6 +863,104 @@ describe("handleToolExecutionEnd private result observer", () => {
   });
 });
 
+describe("handleToolExecutionEnd background exec asyncStarted tracking", () => {
+  it("marks background exec yield (status:running + sessionId) as asyncStarted", async () => {
+    // Background bash yield historically returns status:"running" without the
+    // media-task {async:true,status:"started"} shape. Incomplete-turn must see
+    // asyncStarted so "Command still running (session …)" is not promoted into
+    // an error final while the process continues.
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "exec",
+        toolCallId: "tool-exec-background",
+        isError: false,
+        result: {
+          content: [
+            {
+              type: "text",
+              text: "Command still running (session glow-dune, pid 920156). Use process for follow-up.",
+            },
+          ],
+          details: {
+            status: "running",
+            sessionId: "glow-dune",
+            pid: 920156,
+            startedAt: Date.now(),
+          },
+        },
+      } as never,
+    );
+
+    expect(ctx.state.toolMetas).toEqual([
+      expect.objectContaining({
+        toolName: "exec",
+        asyncStarted: true,
+      }),
+    ]);
+    expect(ctx.state.hadDeterministicSideEffect).toBe(true);
+    expect(ctx.state.replayState.hadPotentialSideEffects).toBe(true);
+  });
+
+  it("marks media async start contract as asyncStarted", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "image_generate",
+        toolCallId: "tool-image-async",
+        isError: false,
+        result: {
+          content: [{ type: "text", text: "Background task started" }],
+          details: {
+            async: true,
+            status: "started",
+            taskId: "task-1",
+            runId: "run-media-1",
+          },
+        },
+      } as never,
+    );
+
+    expect(ctx.state.toolMetas).toEqual([
+      expect.objectContaining({
+        toolName: "image_generate",
+        asyncStarted: true,
+        asyncTaskRunId: "run-media-1",
+        asyncTaskId: "task-1",
+      }),
+    ]);
+  });
+
+  it("does not mark foreground live exec progress (running without sessionId) as asyncStarted", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "exec",
+        toolCallId: "tool-exec-foreground-running",
+        isError: false,
+        result: {
+          content: [{ type: "text", text: "still printing" }],
+          details: {
+            status: "running",
+            aggregated: "partial output",
+          },
+        },
+      } as never,
+    );
+
+    expect(ctx.state.toolMetas.some((entry) => entry.asyncStarted === true)).toBe(false);
+  });
+});
+
 describe("handleToolExecutionEnd sessions_spawn terminal success tracking", () => {
   it("records accepted sessions_spawn identifiers", async () => {
     const { ctx } = createTestContext();

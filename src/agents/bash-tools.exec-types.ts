@@ -116,6 +116,8 @@ export type ExecElevatedDefaults = {
 export type ExecToolDetails =
   | {
       status: "running";
+      /** Marks background yield so incomplete-turn treats this as async progress. */
+      async?: true;
       sessionId: string;
       pid?: number;
       startedAt: number;

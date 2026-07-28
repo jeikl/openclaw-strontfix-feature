@@ -1603,6 +1603,43 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(incompleteTurnText).toBeNull();
   });
 
+  it("does not surface incomplete-turn error while background exec is still running", () => {
+    // After exec yields "Command still running (session …)", toolMetas must
+    // carry asyncStarted so DingTalk/channel finishers do not close the card
+    // with the incomplete error final while the process continues.
+    const incompleteTurnText = resolveIncompleteTurnPayloadText({
+      payloadCount: 0,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        toolMetas: [
+          {
+            toolName: "exec",
+            meta: "sleep 300",
+            asyncStarted: true,
+          },
+        ],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "toolUse",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [
+            {
+              type: "tool_use",
+              id: "tool_1",
+              name: "exec",
+              input: { command: "sleep 300" },
+            },
+          ],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(incompleteTurnText).toBeNull();
+  });
+
   it("surfaces tool-use terminal with pre-tool text and side effects as replay-unsafe (#76477)", () => {
     const incompleteTurnText = resolveIncompleteTurnPayloadText({
       payloadCount: 1,

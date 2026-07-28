@@ -2048,6 +2048,10 @@ export function createExecTool(
               },
             ],
             details: {
+              // Keep status:"running" for process poll/loop detection consumers.
+              // async:true marks this as background work so incomplete-turn does
+              // not promote a successful yield into an error final (#background-exec).
+              async: true,
               status: "running",
               sessionId: run.session.id,
               pid: run.session.pid ?? undefined,
