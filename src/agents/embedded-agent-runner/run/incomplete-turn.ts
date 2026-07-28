@@ -739,9 +739,19 @@ function isPostToolMissingVisibleAnswer(params: {
       stopReason === "stop" || stopReason === "end_turn" || stopReason === "toolUse" || !assistant
     );
   }
-  // Has streamed text: only missing if the terminal turn is still toolUse
-  // (pre-tool narration only; no post-tool stop answer).
-  return stopReason === "toolUse";
+  // Has streamed text: missing post-tool answer if
+  // - terminal is still toolUse (never continued after tools), or
+  // - terminal is stop/end_turn but THIS assistant message has no visible text
+  //   (earlier pre-tool narration is in assistantTexts, but post-tool turn is empty).
+  // Production pattern: payloads=1 + stopReason=stop + tools>=1 + emptyRetries=0.
+  if (stopReason === "toolUse") {
+    return true;
+  }
+  if (stopReason === "stop" || stopReason === "end_turn") {
+    const terminalText = readMessageTextContent(assistant as AgentMessage);
+    return !terminalText;
+  }
+  return false;
 }
 
 /** Allows configured silent handling for replay-safe empty, reasoning-only, or explicit silent turns. */

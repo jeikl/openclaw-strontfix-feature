@@ -2,6 +2,13 @@
 
 Docs: https://docs.openclaw.ai
 
+## 2026.7.747
+
+### Fixes
+
+- **Post-tool incomplete (production pattern):** when tools finished and the model only streamed pre-tool narration (`payloads=1`) then returned an empty post-tool `stop`, treat as missing visible answer and run one empty-response continuation. Production incomplete logs on ailai were 8/11 this shape with `emptyRetries=0/1`.
+- **Coverage:** unit tests for pre-tool narration + empty stop, and empty stop after non-replay-safe tools without messaging delivery.
+
 ## 2026.7.746
 
 ### Highlights

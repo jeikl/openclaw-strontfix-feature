@@ -2027,6 +2027,65 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(retryInstruction).toBe(EMPTY_RESPONSE_RETRY_INSTRUCTION);
   });
 
+  it("retries post-tool empty stop after pre-tool narration (payloads=1 production pattern)", () => {
+    // Production incomplete logs: stopReason=stop payloads=1 tools>=1 emptyRetries=0/1.
+    // Pre-tool "I'll look at the image..." was streamed, tools finished, post-tool
+    // stop had no user text — must continue once, not incomplete_turn immediately.
+    const retryInstruction = resolveEmptyResponseRetryInstruction({
+      provider: "newapi",
+      modelId: "auto-1M",
+      modelApi: "openai-completions",
+      payloadCount: 1,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["我先看一下这张图..."],
+        toolMetas: [{ toolName: "image", replaySafe: true }],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "newapi",
+          model: "auto-1M",
+          content: [{ type: "text", text: "" }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        currentAttemptAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "newapi",
+          model: "auto-1M",
+          content: [{ type: "text", text: "" }],
+        } as unknown as EmbeddedRunAttemptResult["currentAttemptAssistant"],
+      }),
+    });
+
+    expect(retryInstruction).toBe(EMPTY_RESPONSE_RETRY_INSTRUCTION);
+  });
+
+  it("retries empty post-tool stop after side-effect tools without messaging delivery", () => {
+    // Previously hadPotentialSideEffects blocked all empty retries after any tool.
+    const retryInstruction = resolveEmptyResponseRetryInstruction({
+      provider: "openai",
+      modelId: "gpt-5.4",
+      modelApi: "openai-completions",
+      payloadCount: 0,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        toolMetas: [{ toolName: "exec", replaySafe: false }],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [{ type: "text", text: "" }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(retryInstruction).toBe(EMPTY_RESPONSE_RETRY_INSTRUCTION);
+  });
+
   it("retries generic empty Ollama turns without visible text", () => {
     const retryInstruction = resolveEmptyResponseRetryInstruction({
       provider: "ollama",
