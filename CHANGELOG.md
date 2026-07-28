@@ -2,6 +2,12 @@
 
 Docs: https://docs.openclaw.ai
 
+## 2026.7.749
+
+### Fixes
+
+- **Plugin display version prefers package.json:** `plugins list` / `inspect` use installed npm `package.json` version before `openclaw.plugin.json`, so force-installing a newer package no longer looks stuck when the manifest field was left stale.
+
 ## 2026.7.748
 
 ### Fixes
