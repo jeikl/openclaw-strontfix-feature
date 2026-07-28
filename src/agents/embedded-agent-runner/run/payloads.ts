@@ -498,6 +498,7 @@ function resolveToolErrorWarningPolicy(params: {
   suppressToolErrorWarnings?: boolean | (() => boolean | undefined);
   isCronTrigger?: boolean;
   isHeartbeatTrigger?: boolean;
+  runAborted?: boolean;
   sessionKey: string;
   verboseLevel?: VerboseLevel;
 }): ToolErrorWarningPolicy {
@@ -526,6 +527,22 @@ function resolveToolErrorWarningPolicy(params: {
   }
   if (params.suppressToolErrors) {
     return { showWarning: false, includeDetails };
+  }
+  // Exec/bash non-zero exits (business errors like "权限不足", missing files, etc.)
+  // are normal agent-loop feedback: the model already receives the tool result and
+  // should continue. Emitting them as isError finals makes channels (e.g. DingTalk)
+  // finalize the card as an error and stop mid-loop. Only surface abnormal shell
+  // outcomes as user-visible error finals: timeouts, middleware post-process
+  // failures, heartbeat unattended runs, and aborted turns with no recovery path.
+  if (isExecLikeToolName(params.lastToolError.toolName)) {
+    const abnormalShellFailure =
+      params.lastToolError.timedOut === true ||
+      params.lastToolError.middlewareError === true ||
+      params.isHeartbeatTrigger === true ||
+      params.runAborted === true;
+    if (!abnormalShellFailure) {
+      return { showWarning: false, includeDetails };
+    }
   }
   const isMutatingToolError =
     params.lastToolError.mutatingAction ?? isLikelyMutatingToolName(params.lastToolError.toolName);
@@ -875,6 +892,7 @@ export function buildEmbeddedRunPayloads(params: {
       suppressToolErrorWarnings: params.suppressToolErrorWarnings,
       isCronTrigger: params.isCronTrigger,
       isHeartbeatTrigger: params.isHeartbeatTrigger,
+      runAborted: params.runAborted,
       sessionKey: params.sessionKey,
       verboseLevel: params.verboseLevel,
     });
@@ -908,6 +926,8 @@ export function buildEmbeddedRunPayloads(params: {
       }
     }
   }
+  // Note: lastToolError is still available to incomplete-turn / retry logic even when
+  // showWarning is false (business exec failures stay in the model tool result only).
 
   const hasAudioAsVoiceTag = replyItems.some((item) => item.audioAsVoice);
   return replyItems

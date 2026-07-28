@@ -462,8 +462,9 @@ describe("buildEmbeddedRunPayloads", () => {
     });
   });
 
-  it("adds compact tool error fallback when the assistant only invoked tools and verbose mode is on", () => {
-    const payloads = buildPayloads({
+  it("does not surface business exec failure as isError final after tool-only turns", () => {
+    // Model already has the tool result; channel error finals would stop DingTalk mid-loop.
+    expectNoPayloads({
       lastAssistant: makeAssistant({
         stopReason: "toolUse",
         errorMessage: undefined,
@@ -478,11 +479,6 @@ describe("buildEmbeddedRunPayloads", () => {
       }),
       lastToolError: { toolName: "exec", error: "Command exited with code 1" },
       verboseLevel: "on",
-    });
-
-    expectSingleToolErrorPayload(payloads, {
-      title: "Exec",
-      absentDetail: "code 1",
     });
   });
 
@@ -643,7 +639,9 @@ describe("buildEmbeddedRunPayloads", () => {
     expect(payloads[1]?.text).toContain("Exec");
   });
 
-  it("shows exec tool errors when assistant output claims success", () => {
+  it("does not attach business exec error finals when assistant already answered", () => {
+    // Business shell failures stay in the model tool transcript; do not append
+    // a second isError final that would stop channel cards after a recovery reply.
     const payloads = buildPayloads({
       assistantTexts: ["The script is ready to use and saved in your workspace."],
       lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
@@ -653,14 +651,9 @@ describe("buildEmbeddedRunPayloads", () => {
       },
     });
 
-    expect(payloads).toHaveLength(2);
+    expect(payloads).toHaveLength(1);
     expect(payloads[0]?.text).toBe("The script is ready to use and saved in your workspace.");
-    expect(payloads[1]?.isError).toBe(true);
-    expect(payloads[1]?.text).toContain("Exec");
-    expect(payloads[1]?.text).not.toContain("python: command not found");
-    expect(getReplyPayloadMetadata(payloads[1] as object)?.nonTerminalToolErrorWarning).toBe(
-      undefined,
-    );
+    expect(payloads[0]?.isError).not.toBe(true);
   });
 
   it("shows mutating tool errors when assistant output does not acknowledge the failure", () => {
@@ -771,6 +764,7 @@ describe("buildEmbeddedRunPayloads", () => {
 
   it("keeps exec failure labels outside markdown command text", () => {
     const payloads = buildPayloads({
+      runAborted: true,
       lastToolError: {
         toolName: "exec",
         meta: "run python3 /path/to/daily-cost-audit.py",
@@ -789,6 +783,7 @@ describe("buildEmbeddedRunPayloads", () => {
 
   it("prefers raw exec metadata when tool progress detail includes it", () => {
     const payloads = buildPayloads({
+      runAborted: true,
       lastToolError: {
         toolName: "exec",
         meta: "run python3 /tmp/audit.py · `python3 /tmp/audit.py`",
@@ -806,6 +801,7 @@ describe("buildEmbeddedRunPayloads", () => {
 
   it("prefers raw exec metadata when the literal command contains backticks", () => {
     const payloads = buildPayloads({
+      runAborted: true,
       lastToolError: {
         toolName: "exec",
         meta: "run node inline script, `node -e 'console.log(1, `x`)'`",
@@ -823,6 +819,7 @@ describe("buildEmbeddedRunPayloads", () => {
 
   it("preserves raw exec context before trailing raw command metadata", () => {
     const payloads = buildPayloads({
+      runAborted: true,
       lastToolError: {
         toolName: "exec",
         meta: "run python3 /tmp/audit.py, node: mac-1, `python3 /tmp/audit.py`",
@@ -840,6 +837,7 @@ describe("buildEmbeddedRunPayloads", () => {
 
   it("preserves raw exec cwd context before trailing raw command metadata", () => {
     const cwdPayloads = buildPayloads({
+      runAborted: true,
       lastToolError: {
         toolName: "exec",
         meta: "run python3 audit.py (in /tmp/build) · `python3 audit.py`",
@@ -849,6 +847,7 @@ describe("buildEmbeddedRunPayloads", () => {
       toolResultFormat: "markdown",
     });
     const workspaceNodePayloads = buildPayloads({
+      runAborted: true,
       lastToolError: {
         toolName: "exec",
         meta: "run python3 audit.py (workspace), node: mac-1, `python3 audit.py`",
@@ -858,6 +857,7 @@ describe("buildEmbeddedRunPayloads", () => {
       toolResultFormat: "markdown",
     });
     const semanticCompactPayloads = buildPayloads({
+      runAborted: true,
       lastToolError: {
         toolName: "exec",
         meta: "check git status (repo), `git status`",
@@ -883,6 +883,7 @@ describe("buildEmbeddedRunPayloads", () => {
 
   it("does not promote display-summary commas into raw exec context", () => {
     const payloads = buildPayloads({
+      runAborted: true,
       lastToolError: {
         toolName: "exec",
         meta: 'search "foo,bar" in src, `rg "foo,bar" src`',
@@ -900,6 +901,7 @@ describe("buildEmbeddedRunPayloads", () => {
 
   it("does not treat parenthesized raw command arguments as cwd context", () => {
     const payloads = buildPayloads({
+      runAborted: true,
       lastToolError: {
         toolName: "exec",
         meta: 'list files in (in progress) · `ls "(in progress)"`',
@@ -917,6 +919,7 @@ describe("buildEmbeddedRunPayloads", () => {
 
   it("does not duplicate compact cwd labels already present in raw command arguments", () => {
     const payloads = buildPayloads({
+      runAborted: true,
       lastToolError: {
         toolName: "exec",
         meta: 'print text (repo) · `printf "%s" "(repo)"`',
@@ -934,6 +937,7 @@ describe("buildEmbeddedRunPayloads", () => {
 
   it("strips literal synthetic run prefixes without stripping semantic run summaries", () => {
     const genericPayloads = buildPayloads({
+      runAborted: true,
       lastToolError: {
         toolName: "exec",
         meta: "run make build",
@@ -943,6 +947,7 @@ describe("buildEmbeddedRunPayloads", () => {
       toolResultFormat: "markdown",
     });
     const semanticPayloads = buildPayloads({
+      runAborted: true,
       lastToolError: {
         toolName: "exec",
         meta: "run tests",
@@ -952,6 +957,7 @@ describe("buildEmbeddedRunPayloads", () => {
       toolResultFormat: "markdown",
     });
     const scriptPayloads = buildPayloads({
+      runAborted: true,
       lastToolError: {
         toolName: "exec",
         meta: "run deploy",
@@ -961,6 +967,7 @@ describe("buildEmbeddedRunPayloads", () => {
       toolResultFormat: "markdown",
     });
     const compoundPayloads = buildPayloads({
+      runAborted: true,
       lastToolError: {
         toolName: "exec",
         meta: "run tests → install dependencies",
@@ -970,6 +977,7 @@ describe("buildEmbeddedRunPayloads", () => {
       toolResultFormat: "markdown",
     });
     const inlineScriptPayloads = buildPayloads({
+      runAborted: true,
       lastToolError: {
         toolName: "exec",
         meta: "run node inline script",
@@ -979,6 +987,7 @@ describe("buildEmbeddedRunPayloads", () => {
       toolResultFormat: "markdown",
     });
     const heredocPayloads = buildPayloads({
+      runAborted: true,
       lastToolError: {
         toolName: "exec",
         meta: "run python3 inline script (heredoc)",
@@ -988,6 +997,7 @@ describe("buildEmbeddedRunPayloads", () => {
       toolResultFormat: "markdown",
     });
     const sedSummaryPayloads = buildPayloads({
+      runAborted: true,
       lastToolError: {
         toolName: "exec",
         meta: "run sed on file",
@@ -997,6 +1007,7 @@ describe("buildEmbeddedRunPayloads", () => {
       toolResultFormat: "markdown",
     });
     const pipelineSummaryPayloads = buildPayloads({
+      runAborted: true,
       lastToolError: {
         toolName: "exec",
         meta: "run tests -> show first 3 lines",
@@ -1042,6 +1053,7 @@ describe("buildEmbeddedRunPayloads", () => {
 
   it("keeps arbitrary exec cwd suffixes inside markdown command text", () => {
     const payloads = buildPayloads({
+      runAborted: true,
       lastToolError: {
         toolName: "exec",
         meta: "run python3 /tmp/audit.py (in /tmp/build @everyone)",
@@ -1059,6 +1071,7 @@ describe("buildEmbeddedRunPayloads", () => {
 
   it("wraps markdown-capable mutating tool warnings so mention-looking names stay inert", () => {
     const payloads = buildPayloads({
+      runAborted: true,
       lastToolError: {
         toolName: "bash",
         meta: "show matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.txt (workspace)",

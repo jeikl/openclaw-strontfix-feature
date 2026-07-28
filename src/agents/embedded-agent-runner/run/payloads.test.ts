@@ -498,15 +498,23 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     expectSinglePayloadText(payloads, "Done.");
   });
 
-  it("surfaces concise exec tool errors when verbose mode is off", () => {
-    const payloads = buildPayloads({
+  it("keeps business exec failures in-loop (no isError final) when verbose is off", () => {
+    // Non-zero exits are model-visible tool results; surfacing them as isError
+    // finals causes channels to stop the card mid-loop.
+    expectNoPayloads({
       lastToolError: { toolName: "exec", error: "command failed" },
       verboseLevel: "off",
     });
+  });
 
-    expectSingleToolErrorPayload(payloads, {
-      title: "Exec",
-      absentDetail: "command failed",
+  it("keeps business exec failures in-loop even when classified as mutating", () => {
+    expectNoPayloads({
+      lastToolError: {
+        toolName: "exec",
+        error: "权限不足",
+        mutatingAction: true,
+      },
+      verboseLevel: "off",
     });
   });
 
@@ -534,15 +542,10 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
   });
 
-  it("surfaces concise bash tool errors when verbose mode is off", () => {
-    const payloads = buildPayloads({
+  it("keeps business bash failures in-loop (no isError final) when verbose is off", () => {
+    expectNoPayloads({
       lastToolError: { toolName: "bash", error: "command failed" },
       verboseLevel: "off",
-    });
-
-    expectSingleToolErrorPayload(payloads, {
-      title: "Bash",
-      absentDetail: "command failed",
     });
   });
 
@@ -618,40 +621,44 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
   });
 
-  it("surfaces non-timeout exec tool errors for cron sessions without raw details", () => {
-    const payloads = buildPayloads({
+  it("keeps non-timeout cron exec failures in-loop (no isError final)", () => {
+    // Cron still records lastToolError for diagnostics; business exits must not
+    // become channel error finals that abort interactive follow-up turns.
+    expectNoPayloads({
       lastToolError: { toolName: "exec", error: "Command not found" },
       sessionKey: "agent:main:cron:job-1",
       verboseLevel: "off",
     });
-
-    expectSingleToolErrorPayload(payloads, {
-      title: "Exec",
-      absentDetail: "Command not found",
-    });
   });
 
-  it("keeps exec tool errors compact when verbose mode is on", () => {
-    const payloads = buildPayloads({
+  it("keeps business exec failures in-loop even when verbose mode is on", () => {
+    expectNoPayloads({
       lastToolError: { toolName: "exec", error: "command failed" },
       verboseLevel: "on",
     });
-
-    expectSingleToolErrorPayload(payloads, {
-      title: "Exec",
-      absentDetail: "command failed",
-    });
   });
 
-  it("shows exec tool error details when verbose mode is full", () => {
-    const payloads = buildPayloads({
+  it("keeps business exec failures in-loop even when verbose mode is full", () => {
+    expectNoPayloads({
       lastToolError: { toolName: "exec", error: "command failed" },
       verboseLevel: "full",
     });
+  });
 
+  it("surfaces timed-out exec failures as isError finals", () => {
+    const payloads = buildPayloads({
+      lastToolError: {
+        toolName: "exec",
+        timedOut: true,
+        error: "Command timed out after 30 seconds.",
+      },
+      verboseLevel: "off",
+    });
+
+    // Interactive timeouts stay compact (no raw detail) but remain error finals.
     expectSingleToolErrorPayload(payloads, {
       title: "Exec",
-      detail: "command failed",
+      absentDetail: "30 seconds",
     });
   });
 
