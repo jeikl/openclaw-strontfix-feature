@@ -228,9 +228,37 @@ export function hasAttemptTerminalState(attempt: TerminalAttemptState): boolean 
       messagingToolSentTargets: attempt.messagingToolSentTargets ?? [],
     }) ||
     hasAcceptedSessionSpawn(attempt.acceptedSessionSpawns) ||
-    hasAsyncStartedToolActivity(attempt.toolMetas) ||
+    // Only *active* background work is terminal progress. A prior
+    // "Command still running" that later finished via process poll must not
+    // permanently block empty-answer recovery / incomplete detection.
+    hasActiveAsyncBackgroundToolActivity(attempt.toolMetas) ||
     (attempt.successfulCronAdds ?? 0) > 0,
   );
+}
+
+/**
+ * True when the terminal assistant message is a completed stop/end_turn with
+ * user-visible prose (not thinking-only / empty). Used to suppress incomplete_turn
+ * isError finals that freeze DingTalk cards after a successful answer was already
+ * written to the transcript (ERP cron + chat false positives).
+ */
+function hasCompletedTerminalAssistantAnswer(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const stopReason = (message as { stopReason?: string }).stopReason;
+  if (stopReason !== "stop" && stopReason !== "end_turn") {
+    return false;
+  }
+  // Reasoning/thinking-only turns are incomplete for delivery purposes.
+  if (isReasoningOnlyAssistantTurn(message) || isUnsignedThinkingOnlyAssistantTurn(message)) {
+    return false;
+  }
+  if (hasOnlyAssistantReasoningContent(message as AgentMessage)) {
+    return false;
+  }
+  const text = readMessageTextContent(message as AgentMessage)?.trim();
+  return Boolean(text && text.length > 0);
 }
 
 /**
@@ -248,17 +276,34 @@ export function resolveIncompleteTurnPayloadText(params: {
   // Prefer the current attempt's terminal message. The session fallback can
   // still point at the pre-tool turn after a post-tool answer completes. (#80918)
   const assistant = params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant;
+
+  // Hard guard: completed stop/end_turn with visible text is never incomplete.
+  // Production false positives:
+  // - ERP cron: tools succeeded + full summary in lastAssistant (stop) but still
+  //   emitted isError incomplete (DingTalk freezes / cron marks error).
+  // - Chat: payloads=0 while transcript already has the final answer message.
+  // Do not rely on payloadCount alone — payload synthesis can lag transcript.
+  if (hasCompletedTerminalAssistantAnswer(assistant)) {
+    return null;
+  }
+
   const hasTerminalOutput = hasAttemptTerminalState(params.attempt);
   const hadToolActivity = (params.attempt.toolMetas?.length ?? 0) > 0;
   const terminalStopReason = assistant?.stopReason;
   // Pre-tool planning streamed as interim payloads is not a completed answer
   // once tools have run without a post-tool terminal answer.
-  // When currentAttemptAssistant is a real stop/end_turn answer, payloads are the
-  // post-tool final — do not treat them as pre-tool-only (#80918).
+  // When currentAttemptAssistant OR lastAssistant is a real stop/end_turn answer
+  // with visible text, payloads are the post-tool final — not pre-tool-only.
+  // (newapi uses stopReason=stop; without this, onlyPreTool was true for real finals.)
   const currentAttemptStopIsPostToolAnswer =
-    params.attempt.currentAttemptAssistant != null &&
-    (params.attempt.currentAttemptAssistant.stopReason === "stop" ||
-      params.attempt.currentAttemptAssistant.stopReason === "end_turn");
+    hasCompletedTerminalAssistantAnswer(params.attempt.currentAttemptAssistant) ||
+    (params.attempt.currentAttemptAssistant == null &&
+      hasCompletedTerminalAssistantAnswer(params.attempt.lastAssistant)) ||
+    // stop/end_turn on current attempt even if text is empty is still "post-tool
+    // terminal shape"; empty is handled by empty/post-tool retry, not onlyPreTool.
+    (params.attempt.currentAttemptAssistant != null &&
+      (params.attempt.currentAttemptAssistant.stopReason === "stop" ||
+        params.attempt.currentAttemptAssistant.stopReason === "end_turn"));
   const onlyPreToolPayloadsAfterTools =
     hadToolActivity &&
     params.payloadCount !== 0 &&
@@ -271,7 +316,7 @@ export function resolveIncompleteTurnPayloadText(params: {
     !params.attempt.lastToolError &&
     !hasCommittedMessagingToolDeliveryEvidence(params.attempt) &&
     !hasAcceptedSessionSpawn(params.attempt.acceptedSessionSpawns) &&
-    !hasAsyncStartedToolActivity(params.attempt.toolMetas);
+    !hasActiveAsyncBackgroundToolActivity(params.attempt.toolMetas);
   // Tool-use expects a post-tool continuation, while length means the output
   // budget ended. Partial visible text completes neither. (#76477)
   // When only pre-tool payloads exist after tools, do not treat payloadCount as
@@ -323,7 +368,7 @@ export function resolveIncompleteTurnPayloadText(params: {
     return null;
   }
 
-  if (hasAsyncStartedToolActivity(params.attempt.toolMetas)) {
+  if (hasActiveAsyncBackgroundToolActivity(params.attempt.toolMetas)) {
     return null;
   }
 
@@ -391,7 +436,7 @@ export function shouldRetryMissingAssistantTurn(params: {
     return false;
   }
 
-  if (hasAsyncStartedToolActivity(params.attempt.toolMetas)) {
+  if (hasActiveAsyncBackgroundToolActivity(params.attempt.toolMetas)) {
     return false;
   }
 
@@ -417,8 +462,27 @@ function hasOnlySilentAssistantReply(assistantTexts?: readonly string[]): boolea
   );
 }
 
+/** True if any tool in the attempt started background work (side-effect evidence). */
 function hasAsyncStartedToolActivity(toolMetas?: readonly { asyncStarted?: boolean }[]): boolean {
   return (toolMetas ?? []).some((entry) => entry.asyncStarted === true);
+}
+
+/**
+ * True when background work is still in progress *now*.
+ * Only the latest toolMeta with asyncStarted matters: after process poll
+ * returns completed/failed (no asyncStarted on that entry), empty-answer
+ * continuation and incomplete detection may run again. While the latest
+ * entry is still asyncStarted ("Command still running" / "Process still
+ * running"), suppress incomplete isError finals so DingTalk does not freeze.
+ */
+function hasActiveAsyncBackgroundToolActivity(
+  toolMetas?: readonly { asyncStarted?: boolean }[],
+): boolean {
+  const metas = toolMetas ?? [];
+  if (metas.length === 0) {
+    return false;
+  }
+  return metas[metas.length - 1]?.asyncStarted === true;
 }
 
 function isToolResultRole(role: string): boolean {
@@ -715,7 +779,7 @@ function isPostToolMissingVisibleAnswer(params: {
   if (hasAttemptTerminalState(params.attempt)) {
     return false;
   }
-  if (hasAsyncStartedToolActivity(params.attempt.toolMetas)) {
+  if (hasActiveAsyncBackgroundToolActivity(params.attempt.toolMetas)) {
     return false;
   }
   const assistant = params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant;

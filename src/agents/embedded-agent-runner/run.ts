@@ -3872,13 +3872,29 @@ async function runEmbeddedAgentInternal(
             timedOut,
             attempt,
           });
+          // When payload synthesis is empty but the terminal assistant already
+          // completed with visible text (stop/end_turn), recover that answer so we
+          // do not emit incomplete_turn isError finals that freeze DingTalk cards.
+          // Mirrors prompt-timeout recovery, for the normal completion path.
+          const recoveredFinalAssistantPayloadsFromVisibleText =
+            !payloadsWithToolMedia?.length &&
+            !recoveredFinalAssistantPayloadsAfterPromptTimeout?.length &&
+            !silentToolResultReplyPayload &&
+            !aborted &&
+            !timedOut &&
+            Boolean(finalAssistantVisibleText?.trim()) &&
+            ["completed", "end_turn", "stop"].includes(finalAssistantStopReason)
+              ? [{ text: finalAssistantVisibleText!.trim() }]
+              : undefined;
           const payloadsForTerminalPath = recoveredFinalAssistantPayloadsAfterPromptTimeout
             ? recoveredFinalAssistantPayloadsAfterPromptTimeout
-            : payloadsWithToolMedia?.length
-              ? payloadsWithToolMedia
-              : silentToolResultReplyPayload
-                ? [silentToolResultReplyPayload]
-                : payloadsWithToolMedia;
+            : recoveredFinalAssistantPayloadsFromVisibleText
+              ? recoveredFinalAssistantPayloadsFromVisibleText
+              : payloadsWithToolMedia?.length
+                ? payloadsWithToolMedia
+                : silentToolResultReplyPayload
+                  ? [silentToolResultReplyPayload]
+                  : payloadsWithToolMedia;
           const payloadCount = payloadsForTerminalPath?.length ?? 0;
           const emptyAssistantReplyIsSilent = shouldTreatEmptyAssistantReplyAsSilent({
             allowEmptyAssistantReplyAsSilent: params.allowEmptyAssistantReplyAsSilent,
@@ -3958,7 +3974,7 @@ async function runEmbeddedAgentInternal(
             );
             continue;
           }
-          const incompleteTurnText = emptyAssistantReplyIsSilent
+          let incompleteTurnText = emptyAssistantReplyIsSilent
             ? null
             : resolveIncompleteTurnPayloadText({
                 payloadCount,
@@ -3967,6 +3983,23 @@ async function runEmbeddedAgentInternal(
                 timedOut,
                 attempt,
               });
+          // Belt-and-suspenders: never emit incomplete isError when a completed
+          // visible final answer already exists (DingTalk freezes on isError final).
+          const completedVisibleFinalAnswer =
+            !aborted &&
+            !timedOut &&
+            Boolean(finalAssistantVisibleText?.trim()) &&
+            ["completed", "end_turn", "stop"].includes(finalAssistantStopReason);
+          if (incompleteTurnText && completedVisibleFinalAnswer) {
+            log.warn(
+              `incomplete turn suppressed: runId=${params.runId} sessionId=${params.sessionId} ` +
+                `provider=${activeErrorContext.provider}/${activeErrorContext.model} ` +
+                `stopReason=${finalAssistantStopReason} payloads=${payloadCount} ` +
+                `visibleAnswerLen=${finalAssistantVisibleText?.trim().length ?? 0} — ` +
+                `not emitting isError incomplete final`,
+            );
+            incompleteTurnText = null;
+          }
           const incompleteTurnFallbackSafe = Boolean(
             incompleteTurnText &&
             !aborted &&

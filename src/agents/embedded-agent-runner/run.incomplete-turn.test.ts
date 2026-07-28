@@ -1640,6 +1640,61 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(incompleteTurnText).toBeNull();
   });
 
+  it("allows empty-answer recovery after background exec finished (latest meta not async)", () => {
+    // Historical bug: any prior asyncStarted permanently blocked empty retry /
+    // incomplete, so after process exited the run could silently die with no
+    // answer. Only the *latest* toolMeta asyncStarted should suppress.
+    const retryInstruction = resolveEmptyResponseRetryInstruction({
+      provider: "newapi",
+      modelId: "auto-1M",
+      modelApi: "openai-completions",
+      payloadCount: 0,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        toolMetas: [
+          { toolName: "exec", meta: "long job", asyncStarted: true },
+          // process poll completed — no asyncStarted on latest entry
+          { toolName: "process", meta: "poll" },
+        ],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "newapi",
+          model: "auto-1M",
+          content: [{ type: "text", text: "" }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(retryInstruction).toBe(EMPTY_RESPONSE_RETRY_INSTRUCTION);
+  });
+
+  it("still suppresses incomplete while latest process poll is still running", () => {
+    const incompleteTurnText = resolveIncompleteTurnPayloadText({
+      payloadCount: 0,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["正在分析中…"],
+        toolMetas: [
+          { toolName: "exec", meta: "opencode", asyncStarted: true },
+          { toolName: "process", meta: "poll", asyncStarted: true },
+        ],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "newapi",
+          model: "auto-1M",
+          content: [{ type: "text", text: "" }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(incompleteTurnText).toBeNull();
+  });
+
   it("surfaces tool-use terminal with pre-tool text and side effects as replay-unsafe (#76477)", () => {
     const incompleteTurnText = resolveIncompleteTurnPayloadText({
       payloadCount: 1,
@@ -1680,6 +1735,66 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
           provider: "anthropic",
           model: "sonnet-4.6",
           content: [{ type: "text", text: "Here is the final answer." }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(incompleteTurnText).toBeNull();
+  });
+
+  it("does not flag ERP-style stop final with full summary after tools (payloads may lag)", () => {
+    // Production erp同步: 7 exec tools + stopReason=stop + full Chinese summary already
+    // in lastAssistant, but incomplete_turn still emitted isError and froze DingTalk /
+    // marked cron error. payloadCount=0 and payloadCount=1 both must return null.
+    const finalSummary =
+      "ERP 源码同步完成，汇总如下：\n| 拉取 origin/dev | ✅ 合并成功 |\n| 推送 jeik | ✅ |";
+    for (const payloadCount of [0, 1]) {
+      const incompleteTurnText = resolveIncompleteTurnPayloadText({
+        payloadCount,
+        aborted: false,
+        timedOut: false,
+        attempt: makeAttemptResult({
+          assistantTexts: payloadCount > 0 ? [finalSummary] : [],
+          toolMetas: Array.from({ length: 7 }, () => ({
+            toolName: "exec",
+            replaySafe: false,
+          })),
+          lastAssistant: {
+            role: "assistant",
+            stopReason: "stop",
+            provider: "newapi",
+            model: "auto-1M",
+            content: [{ type: "text", text: finalSummary }],
+          } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+          currentAttemptAssistant: {
+            role: "assistant",
+            stopReason: "stop",
+            provider: "newapi",
+            model: "auto-1M",
+            content: [{ type: "text", text: finalSummary }],
+          } as unknown as EmbeddedRunAttemptResult["currentAttemptAssistant"],
+        }),
+      });
+      expect(incompleteTurnText, `payloadCount=${payloadCount}`).toBeNull();
+    }
+  });
+
+  it("does not flag completed stop final when only lastAssistant has text (no currentAttempt)", () => {
+    // newapi often uses stopReason=stop. Without currentAttemptAssistant, older onlyPreTool
+    // logic treated stop+tools as incomplete even when lastAssistant had the answer.
+    const incompleteTurnText = resolveIncompleteTurnPayloadText({
+      payloadCount: 1,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["同步完成 ✅"],
+        toolMetas: [{ toolName: "exec", replaySafe: false }],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "newapi",
+          model: "auto-1M",
+          content: [{ type: "text", text: "同步完成 ✅" }],
         } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
       }),
     });

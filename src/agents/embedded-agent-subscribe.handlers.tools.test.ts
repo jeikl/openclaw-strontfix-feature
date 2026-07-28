@@ -959,6 +959,56 @@ describe("handleToolExecutionEnd background exec asyncStarted tracking", () => {
 
     expect(ctx.state.toolMetas.some((entry) => entry.asyncStarted === true)).toBe(false);
   });
+
+  it("marks Command still running from text alone when details are missing", async () => {
+    // Production path: details stripped / missing but model sees the yield text.
+    // Must still set asyncStarted so incomplete_turn does not freeze DingTalk.
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "exec",
+        toolCallId: "tool-exec-text-only-background",
+        isError: false,
+        result: {
+          content: [
+            {
+              type: "text",
+              text: "Command still running (session nova-shoal, pid 2884623). Use process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up.",
+            },
+          ],
+        },
+      } as never,
+    );
+
+    expect(ctx.state.toolMetas).toEqual([
+      expect.objectContaining({
+        toolName: "exec",
+        asyncStarted: true,
+      }),
+    ]);
+  });
+
+  it("marks Process still running poll text as asyncStarted without details", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "process",
+        toolCallId: "tool-process-text-only",
+        isError: false,
+        result: {
+          content: [{ type: "text", text: "(no new output)\n\nProcess still running." }],
+        },
+      } as never,
+    );
+
+    expect(ctx.state.toolMetas.some((entry) => entry.asyncStarted === true)).toBe(true);
+  });
 });
 
 describe("handleToolExecutionEnd sessions_spawn terminal success tracking", () => {

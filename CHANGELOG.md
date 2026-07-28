@@ -2,6 +2,17 @@
 
 Docs: https://docs.openclaw.ai
 
+## 2026.7.748
+
+### Fixes
+
+- **Incomplete false positive after completed answer (DingTalk freeze):** never emit `Agent couldn't generate a response` / `incomplete_turn` `isError` finals when the terminal assistant already completed with `stop`/`end_turn` and visible prose — even if `payloadCount` is 0 or lagging. Production erp同步 had full summary text + successful git tools but still marked error; DingTalk treats `final+isError` as card freeze.
+- **Recover final visible text into payloads:** when payload synthesis is empty but `finalAssistantVisibleText` exists on a completed stop, synthesize a success payload before incomplete detection (same idea as prompt-timeout recovery).
+- **onlyPreTool / stop:** treat completed `stop`+text on `lastAssistant` (not only `currentAttemptAssistant`) as post-tool final; newapi uses `stopReason=stop`.
+- **Background exec text fallback:** mark `asyncStarted` from `Command still running (session …)` / `Process still running` text when details are missing, so incomplete cannot freeze DingTalk mid-poll.
+- **Active async only:** suppress incomplete/empty-retry only while the _latest_ toolMeta is still `asyncStarted`. After process poll completes, allow empty-answer continuation instead of silent loop death.
+- **Coverage:** ERP-style stop+tools+full summary must not incomplete; stop final without `currentAttemptAssistant` must not incomplete; text-only background yield; post-completion empty retry.
+
 ## 2026.7.747
 
 ### Fixes

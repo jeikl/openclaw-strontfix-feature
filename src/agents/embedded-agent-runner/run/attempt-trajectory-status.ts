@@ -92,8 +92,13 @@ function hasCommittedMessagingDeliveryEvidence(
   );
 }
 
+/** Active background only: latest toolMeta still reports asyncStarted. */
 function hasAsyncStartedToolActivity(toolMetas?: readonly { asyncStarted?: boolean }[]): boolean {
-  return (toolMetas ?? []).some((entry) => entry.asyncStarted === true);
+  const metas = toolMetas ?? [];
+  if (metas.length === 0) {
+    return false;
+  }
+  return metas[metas.length - 1]?.asyncStarted === true;
 }
 
 /**

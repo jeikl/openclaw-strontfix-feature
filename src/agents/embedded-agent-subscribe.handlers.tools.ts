@@ -388,25 +388,64 @@ function applyToolSendReceiptForExtraction(result: unknown, receiptResult: unkno
  * - Media/task start: `{ async: true, status: "started" }`
  * - Background exec / process session: `{ status: "running", sessionId }`
  *   (historical shape from bash exec yield — no `async: true`)
+ * - Text fallback when details were stripped but the canonical yield/poll text
+ *   remains: "Command still running (session …)" / "Process still running."
  */
 function isAsyncStartedToolResult(result: unknown): boolean {
   const details = readToolResultDetails(result);
-  if (!details || typeof details.status !== "string") {
+  if (details && typeof details.status === "string") {
+    const status = details.status.trim().toLowerCase();
+    if (details.async === true && status === "started") {
+      return true;
+    }
+    // Backgrounded shell/process handle: "Command still running (session …)".
+    if (
+      status === "running" &&
+      typeof details.sessionId === "string" &&
+      details.sessionId.trim().length > 0
+    ) {
+      return true;
+    }
+  }
+  // Text fallback: production DingTalk freezes happened when model saw
+  // "Command still running (session nova-shoal, pid …)" but details were missing
+  // on the incomplete path (older builds / stripped details). Keep card open.
+  const text = readToolResultTextForAsyncDetection(result);
+  if (!text) {
     return false;
   }
-  const status = details.status.trim().toLowerCase();
-  if (details.async === true && status === "started") {
+  if (/Command still running\s*\(\s*session\s+\S+/i.test(text)) {
     return true;
   }
-  // Backgrounded shell/process handle: "Command still running (session …)".
-  if (
-    status === "running" &&
-    typeof details.sessionId === "string" &&
-    details.sessionId.trim().length > 0
-  ) {
+  // process poll appends this when status is still running.
+  if (/(?:^|\n)Process still running\.?\s*$/i.test(text.trim())) {
     return true;
   }
   return false;
+}
+
+function readToolResultTextForAsyncDetection(result: unknown): string {
+  if (!result || typeof result !== "object") {
+    return "";
+  }
+  const content = (result as { content?: unknown }).content;
+  if (typeof content === "string") {
+    return content;
+  }
+  if (!Array.isArray(content)) {
+    return "";
+  }
+  const parts: string[] = [];
+  for (const item of content) {
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+    const text = (item as { type?: unknown; text?: unknown }).text;
+    if ((item as { type?: unknown }).type === "text" && typeof text === "string" && text.trim()) {
+      parts.push(text);
+    }
+  }
+  return parts.join("\n");
 }
 
 function readAsyncStartedTaskIds(result: unknown): {
