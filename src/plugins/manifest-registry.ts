@@ -492,7 +492,13 @@ function buildRecord(params: {
     description:
       normalizeOptionalString(params.manifest.description) ?? params.candidate.packageDescription,
     icon: normalizeOptionalString(params.manifest.icon),
-    version: normalizeOptionalString(params.manifest.version) ?? params.candidate.packageVersion,
+    // Prefer package.json version over openclaw.plugin.json.
+    // npm install records the package version that was actually installed; plugin
+    // authors often forget to bump the manifest field, which made inspect/list show
+    // a stale version while the code on disk was already newer.
+    version:
+      normalizeOptionalString(params.candidate.packageVersion) ??
+      normalizeOptionalString(params.manifest.version),
     packageName: params.candidate.packageName,
     packageVersion: params.candidate.packageVersion,
     packageDescription: params.candidate.packageDescription,
@@ -606,7 +612,10 @@ function buildBundleRecord(params: {
     id: params.manifest.id,
     name: normalizeOptionalString(params.manifest.name) ?? params.candidate.idHint,
     description: normalizeOptionalString(params.manifest.description),
-    version: normalizeOptionalString(params.manifest.version),
+    // Prefer package.json version when present (same as plain openclaw plugins).
+    version:
+      normalizeOptionalString(params.candidate.packageVersion) ??
+      normalizeOptionalString(params.manifest.version),
     packageName: params.candidate.packageName,
     packageVersion: params.candidate.packageVersion,
     packageDescription: params.candidate.packageDescription,
