@@ -2,6 +2,19 @@
 
 Docs: https://docs.openclaw.ai
 
+## 2026.7.746
+
+### Highlights
+
+- **Post-tool empty answer recovery:** after tools succeed (e.g. image understanding) but the model returns an empty/`stop` without a user-visible answer, continue once with a “produce the visible answer” instruction instead of immediately emitting incomplete_turn error finals.
+
+### Fixes
+
+- **Non-visible turn retry:** do not skip empty/reasoning continuation retries merely because tools already ran (`hadPotentialSideEffects`). Continuations reuse the transcript and do not re-execute tools; skipping them caused “Agent couldn't generate a response. Note: some tool actions may have already been executed…” after successful image/exec turns.
+- **Post-tool missing answer:** detect toolUse-only / empty post-tool stops and inject the empty-response continuation once before surfacing incomplete_turn.
+- **onlyPreTool false positive (#80918):** when `currentAttemptAssistant` is a real post-tool stop answer, do not treat streamed text as pre-tool-only planning.
+- **Cron NO_REPLY tool silence:** keep intentional silent tool results from becoming incomplete_turn after the post-tool recovery change.
+
 ## 2026.7.745
 
 ### Highlights
