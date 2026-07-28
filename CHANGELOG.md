@@ -2,6 +2,17 @@
 
 Docs: https://docs.openclaw.ai
 
+## 2026.7.745
+
+### Highlights
+
+- **Exec business failures stay in-loop:** non-zero shell exits (e.g. Python “权限不足”) are no longer promoted to user-facing `isError` finals that close channel cards mid-turn; the model keeps the tool result and can continue.
+
+### Fixes
+
+- **Tool-error payload policy:** for `exec`/`bash`, only surface channel `isError` finals on abnormal outcomes — timeout, middleware post-process failure, heartbeat unattended runs, or aborted turns — not ordinary business exits classified as mutating.
+- **DingTalk mid-loop stop:** with DingTalk still treating gateway `final + isError` as error card finalization, removing spurious Exec-failed finals prevents premature `closeStreaming` while agent loop recovery is still possible.
+
 ## 2026.7.744
 
 ### Highlights
