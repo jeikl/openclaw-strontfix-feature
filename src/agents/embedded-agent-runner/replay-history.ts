@@ -4,6 +4,11 @@
 import { stripInternalMetadataForDisplay } from "../../auto-reply/reply/display-text-sanitize.js";
 import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  hangHotpathAsyncSpan,
+  hangHotpathLog,
+  hangHotpathYield,
+} from "../../logging/hang-hotpath-trace.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import {
   sanitizeProviderReplayHistoryWithPlugin,
@@ -708,184 +713,234 @@ export async function sanitizeSessionHistory(params: {
   preserveLatestAssistantThinking?: boolean;
 }): Promise<AgentMessage[]> {
   // Keep docs/reference/transcript-hygiene.md in sync with any logic changes here.
-  const policy =
-    params.policy ??
-    resolveTranscriptPolicy({
+  const baseFields = {
+    sessionId: params.sessionId,
+    message_count: params.messages.length,
+    provider: params.provider ?? "",
+    modelApi: params.modelApi ?? "",
+    modelId: params.modelId ?? "",
+  };
+  return hangHotpathAsyncSpan("sanitizeSessionHistory", baseFields, async () => {
+    const policy =
+      params.policy ??
+      resolveTranscriptPolicy({
+        modelApi: params.modelApi,
+        provider: params.provider,
+        modelId: params.modelId,
+        config: params.config,
+        workspaceDir: params.workspaceDir,
+        env: params.env,
+        model: params.model,
+      });
+    const withInterSessionMarkers = annotateInterSessionUserMessages(params.messages);
+    const signedThinkingProvider = providerRequiresSignedThinking(params.provider);
+    const allowProviderOwnedThinkingReplay = shouldAllowProviderOwnedThinkingReplay({
       modelApi: params.modelApi,
       provider: params.provider,
-      modelId: params.modelId,
-      config: params.config,
-      workspaceDir: params.workspaceDir,
-      env: params.env,
-      model: params.model,
+      policy,
     });
-  const withInterSessionMarkers = annotateInterSessionUserMessages(params.messages);
-  const signedThinkingProvider = providerRequiresSignedThinking(params.provider);
-  const allowProviderOwnedThinkingReplay = shouldAllowProviderOwnedThinkingReplay({
-    modelApi: params.modelApi,
-    provider: params.provider,
-    policy,
-  });
-  const isOpenAIResponsesApi =
-    params.modelApi === "openai-responses" ||
-    params.modelApi === "openai-chatgpt-responses" ||
-    params.modelApi === "azure-openai-responses";
-  const hasSnapshot = Boolean(params.provider || params.modelApi || params.modelId);
-  const priorSnapshot = hasSnapshot ? readLastModelSnapshot(params.sessionManager) : null;
-  const modelChanged = priorSnapshot
-    ? !isSameModelSnapshot(priorSnapshot, {
-        timestamp: 0,
+    const isOpenAIResponsesApi =
+      params.modelApi === "openai-responses" ||
+      params.modelApi === "openai-chatgpt-responses" ||
+      params.modelApi === "azure-openai-responses";
+    const hasSnapshot = Boolean(params.provider || params.modelApi || params.modelId);
+    const priorSnapshot = hasSnapshot ? readLastModelSnapshot(params.sessionManager) : null;
+    const modelChanged = priorSnapshot
+      ? !isSameModelSnapshot(priorSnapshot, {
+          timestamp: 0,
+          provider: params.provider,
+          modelApi: params.modelApi,
+          modelId: params.modelId,
+        })
+      : false;
+    const normalizedAssistantReplay = normalizeAssistantReplayContent(withInterSessionMarkers);
+    hangHotpathLog("sanitizeSessionHistory", "during", {
+      ...baseFields,
+      stage: "images_start",
+    });
+    const sanitizedImages = await sanitizeSessionMessagesImages(
+      normalizedAssistantReplay,
+      "session:history",
+      {
+        sanitizeMode: policy.sanitizeMode,
+        sanitizeToolCallIds:
+          policy.sanitizeToolCallIds && !allowProviderOwnedThinkingReplay && !isOpenAIResponsesApi,
+        toolCallIdMode: policy.toolCallIdMode,
+        duplicateToolCallIdStyle: policy.duplicateToolCallIdStyle,
+        preserveNativeAnthropicToolUseIds: policy.preserveNativeAnthropicToolUseIds,
+        preserveSignatures: policy.preserveSignatures,
+        sanitizeThoughtSignatures: policy.sanitizeThoughtSignatures,
+        ...resolveImageSanitizationLimits(params.config),
+      },
+    );
+    // Cooperative yield so healthz can run between heavy sync stages.
+    await hangHotpathYield("sanitizeSessionHistory", "after_images");
+    const preserveLatestAssistantThinking =
+      params.preserveLatestAssistantThinking ??
+      shouldPreserveLatestAssistantThinking(sanitizedImages);
+    // Strip thinking signatures that are stale due to compaction context changes before
+    // stripInvalidThinkingSignatures runs. Pre-compaction kept messages carry signatures
+    // bound to the original prefix; after compaction the prefix changes and Anthropic
+    // rejects them. Timestamp comparison with the latest compaction summary identifies
+    // the affected messages regardless of path (standard or truncateAfterCompaction).
+    const compactionStaleStripped =
+      signedThinkingProvider || policy.preserveSignatures
+        ? stripStaleThinkingSignaturesForCompactionReplay(sanitizedImages)
+        : sanitizedImages;
+    // Some recovery paths supply a narrow policy with preserveSignatures disabled.
+    // Native signed-thinking providers still cannot replay missing/blank
+    // signatures once the assistant turn is no longer latest in the outbound
+    // request.
+    const validatedThinkingSignatures =
+      signedThinkingProvider || policy.preserveSignatures
+        ? stripInvalidThinkingSignatures(compactionStaleStripped, {
+            preserveLatestAssistant: preserveLatestAssistantThinking,
+          })
+        : compactionStaleStripped;
+    const droppedReasoning = policy.dropReasoningFromHistory
+      ? dropReasoningFromHistory(validatedThinkingSignatures)
+      : validatedThinkingSignatures;
+    const droppedThinking = policy.dropThinkingBlocks
+      ? dropThinkingBlocks(droppedReasoning)
+      : droppedReasoning;
+    hangHotpathLog("sanitizeSessionHistory", "during", {
+      ...baseFields,
+      stage: "sanitizeToolCallInputs_start",
+      after_drop_count: droppedThinking.length,
+    });
+    const sanitizedToolCalls = sanitizeToolCallInputs(droppedThinking, {
+      allowedToolNames: params.allowedToolNames,
+      allowProviderOwnedThinkingReplay,
+    });
+    await hangHotpathYield("sanitizeSessionHistory", "after_tool_call_inputs");
+    // OpenAI Responses rejects orphan/missing function_call_output items. Upstream
+    // Codex repairs those gaps with "aborted"; keep that before the fc_* downgrade
+    // so both call and result ids are rewritten together. Covered by unit replay
+    // tests plus live OpenAI/Codex and generic replay-repair model tests.
+    hangHotpathLog("sanitizeSessionHistory", "during", {
+      ...baseFields,
+      stage: "pairing_repair_openai_start",
+      repair: Boolean(isOpenAIResponsesApi && policy.repairToolUseResultPairing),
+    });
+    const openAIRepairedToolCalls =
+      isOpenAIResponsesApi && policy.repairToolUseResultPairing
+        ? sanitizeToolUseResultPairing(sanitizedToolCalls, {
+            erroredAssistantResultPolicy: "drop",
+            // Match upstream Codex history normalization for OpenAI Responses:
+            // missing function_call_output entries are model-visible "aborted".
+            missingToolResultText: "aborted",
+          })
+        : sanitizedToolCalls;
+    const openAISafeToolCalls = isOpenAIResponsesApi
+      ? downgradeOpenAIFunctionCallReasoningPairs(
+          normalizeOpenAIResponsesToolCallIds(
+            downgradeOpenAIReasoningBlocks(openAIRepairedToolCalls, {
+              dropReplayableReasoning: modelChanged,
+            }),
+          ),
+        )
+      : sanitizedToolCalls;
+    const sanitizedToolIds =
+      policy.sanitizeToolCallIds && policy.toolCallIdMode
+        ? sanitizeToolCallIdsForCloudCodeAssist(openAISafeToolCalls, policy.toolCallIdMode, {
+            preserveNativeAnthropicToolUseIds: policy.preserveNativeAnthropicToolUseIds,
+            duplicateToolCallIdStyle: policy.duplicateToolCallIdStyle,
+            preserveReplaySafeThinkingToolCallIds: allowProviderOwnedThinkingReplay,
+            allowedToolNames: params.allowedToolNames,
+          })
+        : openAISafeToolCalls;
+    await hangHotpathYield("sanitizeSessionHistory", "before_pairing_repair_generic");
+    // Gemini/Anthropic-class providers also require tool results to stay adjacent
+    // to their assistant tool calls. They do not use Codex's "aborted" text, but
+    // the same ordering repair is live-tested with Gemini 3 Flash.
+    hangHotpathLog("sanitizeSessionHistory", "during", {
+      ...baseFields,
+      stage: "pairing_repair_generic_start",
+      repair: Boolean(!isOpenAIResponsesApi && policy.repairToolUseResultPairing),
+    });
+    const repairedTools =
+      !isOpenAIResponsesApi && policy.repairToolUseResultPairing
+        ? sanitizeToolUseResultPairing(sanitizedToolIds, {
+            erroredAssistantResultPolicy: "drop",
+          })
+        : sanitizedToolIds;
+    await hangHotpathYield("sanitizeSessionHistory", "after_pairing_repair");
+    const sanitizedToolResults = stripToolResultDetails(repairedTools);
+    const sanitizedCompactionUsage = ensureAssistantUsageSnapshots(
+      stripStaleAssistantUsageBeforeLatestCompaction(sanitizedToolResults),
+    );
+    const provider = params.provider?.trim();
+    let providerSanitized: AgentMessage[] | undefined;
+    if (provider && provider.length > 0) {
+      hangHotpathLog("sanitizeSessionHistory", "during", {
+        ...baseFields,
+        stage: "provider_plugin_start",
+        provider,
+      });
+      const pluginParams = createProviderReplayPluginParams({ ...params, provider });
+      const providerResult = await sanitizeProviderReplayHistoryWithPlugin({
+        ...pluginParams,
+        context: {
+          ...pluginParams.context,
+          sessionId: params.sessionId ?? "",
+          messages: sanitizedCompactionUsage,
+          allowedToolNames: params.allowedToolNames,
+          sessionState: createProviderReplaySessionState(params.sessionManager),
+        },
+      });
+      providerSanitized = providerResult ?? undefined;
+      await hangHotpathYield("sanitizeSessionHistory", "after_provider_plugin");
+    }
+    const sanitizedWithProvider = providerSanitized ?? sanitizedCompactionUsage;
+    const responsesProviderRepaired =
+      isOpenAIResponsesApi && policy.repairToolUseResultPairing
+        ? sanitizeToolUseResultPairing(sanitizedWithProvider, {
+            erroredAssistantResultPolicy: "drop",
+            // Provider replay hooks run after the core repair pipeline and may
+            // rewrite history. Keep the final Responses invariant guarded by the
+            // same Codex-compatible repair instead of failing on hook output.
+            missingToolResultText: "aborted",
+          })
+        : sanitizedWithProvider;
+    const responsesInvariantChecked = isOpenAIResponsesApi
+      ? assertOpenAIResponsesToolUseResultInvariant(responsesProviderRepaired)
+      : responsesProviderRepaired;
+
+    if (hasSnapshot && (!priorSnapshot || modelChanged)) {
+      appendModelSnapshot(params.sessionManager, {
+        timestamp: Date.now(),
         provider: params.provider,
         modelApi: params.modelApi,
         modelId: params.modelId,
-      })
-    : false;
-  const normalizedAssistantReplay = normalizeAssistantReplayContent(withInterSessionMarkers);
-  const sanitizedImages = await sanitizeSessionMessagesImages(
-    normalizedAssistantReplay,
-    "session:history",
-    {
-      sanitizeMode: policy.sanitizeMode,
-      sanitizeToolCallIds:
-        policy.sanitizeToolCallIds && !allowProviderOwnedThinkingReplay && !isOpenAIResponsesApi,
-      toolCallIdMode: policy.toolCallIdMode,
-      duplicateToolCallIdStyle: policy.duplicateToolCallIdStyle,
-      preserveNativeAnthropicToolUseIds: policy.preserveNativeAnthropicToolUseIds,
-      preserveSignatures: policy.preserveSignatures,
-      sanitizeThoughtSignatures: policy.sanitizeThoughtSignatures,
-      ...resolveImageSanitizationLimits(params.config),
-    },
-  );
-  const preserveLatestAssistantThinking =
-    params.preserveLatestAssistantThinking ??
-    shouldPreserveLatestAssistantThinking(sanitizedImages);
-  // Strip thinking signatures that are stale due to compaction context changes before
-  // stripInvalidThinkingSignatures runs. Pre-compaction kept messages carry signatures
-  // bound to the original prefix; after compaction the prefix changes and Anthropic
-  // rejects them. Timestamp comparison with the latest compaction summary identifies
-  // the affected messages regardless of path (standard or truncateAfterCompaction).
-  const compactionStaleStripped =
-    signedThinkingProvider || policy.preserveSignatures
-      ? stripStaleThinkingSignaturesForCompactionReplay(sanitizedImages)
-      : sanitizedImages;
-  // Some recovery paths supply a narrow policy with preserveSignatures disabled.
-  // Native signed-thinking providers still cannot replay missing/blank
-  // signatures once the assistant turn is no longer latest in the outbound
-  // request.
-  const validatedThinkingSignatures =
-    signedThinkingProvider || policy.preserveSignatures
-      ? stripInvalidThinkingSignatures(compactionStaleStripped, {
-          preserveLatestAssistant: preserveLatestAssistantThinking,
-        })
-      : compactionStaleStripped;
-  const droppedReasoning = policy.dropReasoningFromHistory
-    ? dropReasoningFromHistory(validatedThinkingSignatures)
-    : validatedThinkingSignatures;
-  const droppedThinking = policy.dropThinkingBlocks
-    ? dropThinkingBlocks(droppedReasoning)
-    : droppedReasoning;
-  const sanitizedToolCalls = sanitizeToolCallInputs(droppedThinking, {
-    allowedToolNames: params.allowedToolNames,
-    allowProviderOwnedThinkingReplay,
+      });
+    }
+
+    if (!policy.applyGoogleTurnOrdering) {
+      hangHotpathLog("sanitizeSessionHistory", "during", {
+        ...baseFields,
+        stage: "done",
+        out_count: responsesInvariantChecked.length,
+      });
+      return responsesInvariantChecked;
+    }
+
+    // Strict OpenAI-compatible providers (vLLM, Gemma, etc.) also reject
+    // conversations that start with an assistant turn (e.g. delivery-mirror
+    // messages after /new). Provider hooks may already have applied a
+    // provider-owned ordering rewrite above; keep this generic fallback for the
+    // strict OpenAI-compatible path and for any provider that leaves assistant-
+    // first repair to core. See #38962.
+    const googleOrdered = sanitizeGoogleTurnOrdering(responsesInvariantChecked);
+    const finalMessages = isOpenAIResponsesApi
+      ? assertOpenAIResponsesToolUseResultInvariant(googleOrdered)
+      : googleOrdered;
+    hangHotpathLog("sanitizeSessionHistory", "during", {
+      ...baseFields,
+      stage: "done_google_order",
+      out_count: finalMessages.length,
+    });
+    return finalMessages;
   });
-  // OpenAI Responses rejects orphan/missing function_call_output items. Upstream
-  // Codex repairs those gaps with "aborted"; keep that before the fc_* downgrade
-  // so both call and result ids are rewritten together. Covered by unit replay
-  // tests plus live OpenAI/Codex and generic replay-repair model tests.
-  const openAIRepairedToolCalls =
-    isOpenAIResponsesApi && policy.repairToolUseResultPairing
-      ? sanitizeToolUseResultPairing(sanitizedToolCalls, {
-          erroredAssistantResultPolicy: "drop",
-          // Match upstream Codex history normalization for OpenAI Responses:
-          // missing function_call_output entries are model-visible "aborted".
-          missingToolResultText: "aborted",
-        })
-      : sanitizedToolCalls;
-  const openAISafeToolCalls = isOpenAIResponsesApi
-    ? downgradeOpenAIFunctionCallReasoningPairs(
-        normalizeOpenAIResponsesToolCallIds(
-          downgradeOpenAIReasoningBlocks(openAIRepairedToolCalls, {
-            dropReplayableReasoning: modelChanged,
-          }),
-        ),
-      )
-    : sanitizedToolCalls;
-  const sanitizedToolIds =
-    policy.sanitizeToolCallIds && policy.toolCallIdMode
-      ? sanitizeToolCallIdsForCloudCodeAssist(openAISafeToolCalls, policy.toolCallIdMode, {
-          preserveNativeAnthropicToolUseIds: policy.preserveNativeAnthropicToolUseIds,
-          duplicateToolCallIdStyle: policy.duplicateToolCallIdStyle,
-          preserveReplaySafeThinkingToolCallIds: allowProviderOwnedThinkingReplay,
-          allowedToolNames: params.allowedToolNames,
-        })
-      : openAISafeToolCalls;
-  // Gemini/Anthropic-class providers also require tool results to stay adjacent
-  // to their assistant tool calls. They do not use Codex's "aborted" text, but
-  // the same ordering repair is live-tested with Gemini 3 Flash.
-  const repairedTools =
-    !isOpenAIResponsesApi && policy.repairToolUseResultPairing
-      ? sanitizeToolUseResultPairing(sanitizedToolIds, {
-          erroredAssistantResultPolicy: "drop",
-        })
-      : sanitizedToolIds;
-  const sanitizedToolResults = stripToolResultDetails(repairedTools);
-  const sanitizedCompactionUsage = ensureAssistantUsageSnapshots(
-    stripStaleAssistantUsageBeforeLatestCompaction(sanitizedToolResults),
-  );
-  const provider = params.provider?.trim();
-  let providerSanitized: AgentMessage[] | undefined;
-  if (provider && provider.length > 0) {
-    const pluginParams = createProviderReplayPluginParams({ ...params, provider });
-    const providerResult = await sanitizeProviderReplayHistoryWithPlugin({
-      ...pluginParams,
-      context: {
-        ...pluginParams.context,
-        sessionId: params.sessionId ?? "",
-        messages: sanitizedCompactionUsage,
-        allowedToolNames: params.allowedToolNames,
-        sessionState: createProviderReplaySessionState(params.sessionManager),
-      },
-    });
-    providerSanitized = providerResult ?? undefined;
-  }
-  const sanitizedWithProvider = providerSanitized ?? sanitizedCompactionUsage;
-  const responsesProviderRepaired =
-    isOpenAIResponsesApi && policy.repairToolUseResultPairing
-      ? sanitizeToolUseResultPairing(sanitizedWithProvider, {
-          erroredAssistantResultPolicy: "drop",
-          // Provider replay hooks run after the core repair pipeline and may
-          // rewrite history. Keep the final Responses invariant guarded by the
-          // same Codex-compatible repair instead of failing on hook output.
-          missingToolResultText: "aborted",
-        })
-      : sanitizedWithProvider;
-  const responsesInvariantChecked = isOpenAIResponsesApi
-    ? assertOpenAIResponsesToolUseResultInvariant(responsesProviderRepaired)
-    : responsesProviderRepaired;
-
-  if (hasSnapshot && (!priorSnapshot || modelChanged)) {
-    appendModelSnapshot(params.sessionManager, {
-      timestamp: Date.now(),
-      provider: params.provider,
-      modelApi: params.modelApi,
-      modelId: params.modelId,
-    });
-  }
-
-  if (!policy.applyGoogleTurnOrdering) {
-    return responsesInvariantChecked;
-  }
-
-  // Strict OpenAI-compatible providers (vLLM, Gemma, etc.) also reject
-  // conversations that start with an assistant turn (e.g. delivery-mirror
-  // messages after /new). Provider hooks may already have applied a
-  // provider-owned ordering rewrite above; keep this generic fallback for the
-  // strict OpenAI-compatible path and for any provider that leaves assistant-
-  // first repair to core. See #38962.
-  const googleOrdered = sanitizeGoogleTurnOrdering(responsesInvariantChecked);
-  return isOpenAIResponsesApi
-    ? assertOpenAIResponsesToolUseResultInvariant(googleOrdered)
-    : googleOrdered;
 }
 
 /**
