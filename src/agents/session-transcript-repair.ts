@@ -9,6 +9,11 @@ import {
   normalizeOptionalString,
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
+import {
+  createHangHotpathProgress,
+  hangHotpathLog,
+  hangHotpathSyncSpan,
+} from "../logging/hang-hotpath-trace.js";
 import type { AgentMessage } from "./runtime/index.js";
 import { isThinkingLikeBlock } from "./thinking-block.js";
 import {
@@ -317,9 +322,36 @@ export function stripToolResultDetails(messages: AgentMessage[]): AgentMessage[]
   return touched ? out : messages;
 }
 
+/**
+ * nextToolAssistantAfter[i] = smallest j > i where messages[j] is an assistant
+ * with tool calls, or messages.length. Built in one reverse O(N) pass so
+ * collectFollowingToolResults can bound its forward scan without re-discovering
+ * the stop condition from scratch on every call (avoids O(N^2) over dense tool
+ * transcripts — residual hotspot after 9f4f478).
+ */
+function buildNextToolAssistantAfterIndex(messages: AgentMessage[]): number[] {
+  const n = messages.length;
+  const next = new Array<number>(n);
+  let nextJ = n;
+  for (let i = n - 1; i >= 0; i -= 1) {
+    next[i] = nextJ;
+    const message = messages[i];
+    if (
+      message &&
+      typeof message === "object" &&
+      message.role === "assistant" &&
+      assistantHasToolCalls(message)
+    ) {
+      nextJ = i;
+    }
+  }
+  return next;
+}
+
 function collectFollowingToolResults(
   messages: AgentMessage[],
   index: number,
+  endExclusive?: number,
 ): { ids: Set<string>; displaced: boolean } {
   const ids = new Set<string>();
   const assistant = messages[index];
@@ -329,12 +361,18 @@ function collectFollowingToolResults(
       : [];
   let sawNonToolResult = false;
   let displaced = false;
-  for (let nextIndex = index + 1; nextIndex < messages.length; nextIndex += 1) {
+  const stopAt =
+    typeof endExclusive === "number" && Number.isFinite(endExclusive)
+      ? Math.min(Math.max(endExclusive, index + 1), messages.length)
+      : messages.length;
+  for (let nextIndex = index + 1; nextIndex < stopAt; nextIndex += 1) {
     const message = messages[nextIndex];
     if (!message || typeof message !== "object") {
       sawNonToolResult = true;
       continue;
     }
+    // Safety: still break if an assistant-with-tools appears inside the bound
+    // (index table should already stop before it).
     if (message.role === "assistant" && assistantHasToolCalls(message)) {
       break;
     }
@@ -356,6 +394,15 @@ function repairToolCallInputs(
   messages: AgentMessage[],
   options?: ToolCallInputRepairOptions,
 ): ToolCallInputRepairReport {
+  return hangHotpathSyncSpan("repairToolCallInputs", { message_count: messages.length }, () =>
+    repairToolCallInputsImpl(messages, options),
+  );
+}
+
+function repairToolCallInputsImpl(
+  messages: AgentMessage[],
+  options?: ToolCallInputRepairOptions,
+): ToolCallInputRepairReport {
   let droppedToolCalls = 0;
   let droppedAssistantMessages = 0;
   let changed = false;
@@ -364,8 +411,16 @@ function repairToolCallInputs(
   const allowProviderOwnedThinkingReplay = options?.allowProviderOwnedThinkingReplay === true;
   const preservedThinkingToolCallIds = new Set<string>();
   const priorToolCallIds = new Set<string>();
+  // One reverse pass → O(1) stop bound per collectFollowingToolResults call.
+  const nextToolAssistantAfter = buildNextToolAssistantAfterIndex(messages);
+  hangHotpathLog("repairToolCallInputs", "during", {
+    stage: "index_built",
+    message_count: messages.length,
+  });
+  const progress = createHangHotpathProgress("repairToolCallInputs", 1000);
 
   for (let index = 0; index < messages.length; index += 1) {
+    progress.tick({ index, message_count: messages.length });
     const msg = messages[index];
     if (!msg || typeof msg !== "object") {
       out.push(msg);
@@ -387,7 +442,11 @@ function repairToolCallInputs(
       // the later pairing repair can synthesize missing legacy tool results
       // without mutating provider-owned assistant content.
       const replaySafeToolCalls = extractToolCallsFromAssistant(msg);
-      const followingToolResults = collectFollowingToolResults(messages, index);
+      const followingToolResults = collectFollowingToolResults(
+        messages,
+        index,
+        nextToolAssistantAfter[index],
+      );
       if (
         isReplaySafeThinkingAssistantTurn(msg.content, allowedToolNames) &&
         replaySafeToolCalls.every(
@@ -514,6 +573,12 @@ function repairToolCallInputs(
     out.push(msg);
   }
 
+  progress.finish({
+    droppedToolCalls,
+    droppedAssistantMessages,
+    changed,
+    out_count: out.length,
+  });
   return {
     messages: changed ? out : messages,
     droppedToolCalls,
@@ -609,12 +674,25 @@ export function repairToolUseResultPairing(
   messages: AgentMessage[],
   options?: ToolUseResultPairingOptions,
 ): ToolUseRepairReport {
+  return hangHotpathSyncSpan("repairToolUseResultPairing", { message_count: messages.length }, () =>
+    repairToolUseResultPairingImpl(messages, options),
+  );
+}
+
+function repairToolUseResultPairingImpl(
+  messages: AgentMessage[],
+  options?: ToolUseResultPairingOptions,
+): ToolUseRepairReport {
   // Anthropic (and Cloud Code Assist) reject transcripts where assistant tool calls are not
   // immediately followed by matching tool results. Session files can end up with results
   // displaced (e.g. after user turns) or duplicated. Repair by:
   // - moving matching toolResult messages directly after their assistant toolCall turn
   // - inserting synthetic error toolResults for missing ids
   // - dropping duplicate toolResults for the same id (anywhere in the transcript)
+  hangHotpathLog("repairToolUseResultPairing", "during", {
+    stage: "index_tool_results_start",
+    message_count: messages.length,
+  });
   const explicitToolResultsById = new Map<
     string,
     Array<{ msg: Extract<AgentMessage, { role: "toolResult" }>; index: number }>
@@ -641,6 +719,11 @@ export function repairToolUseResultPairing(
       }
     }
   }
+  hangHotpathLog("repairToolUseResultPairing", "during", {
+    stage: "index_tool_results_done",
+    explicit_ids: explicitToolResultsById.size,
+    legacy_results: legacyToolResults.length,
+  });
 
   const out: AgentMessage[] = [];
   const added: Array<Extract<AgentMessage, { role: "toolResult" }>> = [];
@@ -650,6 +733,7 @@ export function repairToolUseResultPairing(
   let droppedOrphanCount = 0;
   let moved = false;
   let changed = false;
+  const progress = createHangHotpathProgress("repairToolUseResultPairing", 1000);
 
   const pushToolResult = (msg: Extract<AgentMessage, { role: "toolResult" }>) => {
     const id = extractToolResultId(msg);
@@ -684,6 +768,7 @@ export function repairToolUseResultPairing(
   };
 
   for (let i = 0; i < messages.length; i += 1) {
+    progress.tick({ index: i, message_count: messages.length, out_len: out.length });
     const msg = messages[i];
     if (!msg || typeof msg !== "object") {
       out.push(msg);
@@ -867,6 +952,14 @@ export function repairToolUseResultPairing(
   }
 
   const changedOrMoved = changed || moved;
+  progress.finish({
+    changed: changedOrMoved,
+    moved,
+    droppedDuplicateCount,
+    droppedOrphanCount,
+    added: added.length,
+    out_count: out.length,
+  });
   return {
     messages: changedOrMoved ? out : messages,
     added,
