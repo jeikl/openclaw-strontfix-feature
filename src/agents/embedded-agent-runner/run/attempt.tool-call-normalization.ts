@@ -12,6 +12,7 @@ import {
   type PlainTextToolCallBlock,
   type PlainTextToolCallNameMatcher,
 } from "../../../../packages/tool-call-repair/src/index.js";
+import { hangHotpathLog, hangHotpathSyncSpan } from "../../../logging/hang-hotpath-trace.js";
 import { visitObjectContentBlocks } from "../../../shared/message-content-blocks.js";
 import {
   downgradeOpenAIFunctionCallReasoningPairs,
@@ -1198,12 +1199,26 @@ export function wrapStreamFnSanitizeMalformedToolCalls(
   >,
   provider?: string | null,
 ): StreamFn {
+  // Force full pairing repair on every model call only when explicitly enabled.
+  // Default: repair when inputs changed, or once for OpenAI Responses invariants.
+  // OPENCLAW_STREAM_FULL_REPAIR_EVERY_CALL=1 restores legacy always-repair behavior.
+  const forceFullRepairEveryCall =
+    process.env.OPENCLAW_STREAM_FULL_REPAIR_EVERY_CALL === "1" ||
+    process.env.OPENCLAW_STREAM_FULL_REPAIR_EVERY_CALL === "true";
+
   return (model, context, options) => {
     const ctx = context as unknown as { messages?: unknown };
     const messages = ctx?.messages;
     if (!Array.isArray(messages)) {
       return baseFn(model, context, options);
     }
+    const messageCount = messages.length;
+    hangHotpathLog("wrapStreamFnSanitizeMalformedToolCalls", "before", {
+      message_count: messageCount,
+      provider: provider ?? "",
+      modelApi: String((model as { api?: unknown })?.api ?? ""),
+      force_full_repair: forceFullRepairEveryCall,
+    });
     const allowProviderOwnedThinkingReplay = shouldAllowProviderOwnedThinkingReplay({
       modelApi: (model as { api?: unknown })?.api as string | null | undefined,
       provider,
@@ -1223,14 +1238,47 @@ export function wrapStreamFnSanitizeMalformedToolCalls(
       (model as { api?: unknown }).api === "openai-chatgpt-responses" ||
       (model as { api?: unknown }).api === "azure-openai-responses";
     const replayInputsChanged = sanitized.messages !== messages;
-    let nextMessages = isOpenAIResponsesApi
-      ? sanitizeToolUseResultPairing(sanitized.messages, {
-          erroredAssistantResultPolicy: "drop",
-          missingToolResultText: "aborted",
-        })
-      : replayInputsChanged
-        ? sanitizeToolUseResultPairing(sanitized.messages)
-        : sanitized.messages;
+    // OpenAI Responses: keep pairing repair for provider invariants (logged).
+    // Non-Responses: full pairing only when inputs changed OR force env is set.
+    // (Previously OpenAI always repaired every stream call — that multiplies cost
+    // on long tool chains; we still repair OpenAI Responses every call because
+    // missing function_call_output breaks the request, but we log each hit.)
+    let nextMessages: AgentMessage[];
+    if (isOpenAIResponsesApi) {
+      hangHotpathLog("wrapStreamFnSanitizeMalformedToolCalls", "during", {
+        stage: "openai_responses_pairing_repair",
+        message_count: sanitized.messages.length,
+        replay_inputs_changed: replayInputsChanged,
+      });
+      nextMessages = hangHotpathSyncSpan(
+        "stream.sanitizeToolUseResultPairing.openai",
+        { message_count: sanitized.messages.length },
+        () =>
+          sanitizeToolUseResultPairing(sanitized.messages, {
+            erroredAssistantResultPolicy: "drop",
+            missingToolResultText: "aborted",
+          }),
+      );
+    } else if (forceFullRepairEveryCall || replayInputsChanged) {
+      hangHotpathLog("wrapStreamFnSanitizeMalformedToolCalls", "during", {
+        stage: "generic_pairing_repair",
+        message_count: sanitized.messages.length,
+        replay_inputs_changed: replayInputsChanged,
+        force: forceFullRepairEveryCall,
+      });
+      nextMessages = hangHotpathSyncSpan(
+        "stream.sanitizeToolUseResultPairing.generic",
+        { message_count: sanitized.messages.length },
+        () => sanitizeToolUseResultPairing(sanitized.messages),
+      );
+    } else {
+      hangHotpathLog("wrapStreamFnSanitizeMalformedToolCalls", "during", {
+        stage: "skip_pairing_repair",
+        message_count: sanitized.messages.length,
+        reason: "inputs_unchanged",
+      });
+      nextMessages = sanitized.messages;
+    }
     let strippedTrailingAssistantPrefill = false;
     if (transcriptPolicy?.validateAnthropicTurns) {
       nextMessages = sanitizeAnthropicReplayToolResults(nextMessages, {
@@ -1243,6 +1291,10 @@ export function wrapStreamFnSanitizeMalformedToolCalls(
       strippedTrailingAssistantPrefill ||= nextMessages !== beforeStrip;
     }
     if (nextMessages === messages) {
+      hangHotpathLog("wrapStreamFnSanitizeMalformedToolCalls", "after", {
+        message_count: messageCount,
+        changed: false,
+      });
       return baseFn(model, context, options);
     }
     if (
@@ -1257,6 +1309,12 @@ export function wrapStreamFnSanitizeMalformedToolCalls(
         nextMessages = validateAnthropicTurns(nextMessages);
       }
     }
+    hangHotpathLog("wrapStreamFnSanitizeMalformedToolCalls", "after", {
+      message_count: messageCount,
+      out_count: nextMessages.length,
+      changed: true,
+      dropped_assistant: sanitized.droppedAssistantMessages,
+    });
     const nextContext = {
       ...(context as unknown as Record<string, unknown>),
       messages: nextMessages,
