@@ -2,6 +2,20 @@
 
 Docs: https://docs.openclaw.ai
 
+## 2026.7.750
+
+### Highlights
+
+- **Agent hang / single-core JS spin (G-type):** large session transcripts no longer block the event loop for minutes during sanitize/repair; gateway stays responsive and external hang monitors can correlate internal hotpath stages.
+
+### Fixes
+
+- **Transcript repair O(N²):** index `collectFollowingToolResults` so pairing residual scans are O(N) instead of quadratic on long histories (primary cause of multi-minute CPU spin).
+- **sanitizeSessionHistory yields:** run sanitize in staged slices with event-loop yields and per-stage timing logs, so long repairs do not monopolize the single JS thread.
+- **Stream path skip-repair:** when tool-call normalization input is unchanged, skip full pairing repair on the hot stream path.
+- **Bounded id allocation:** cap `allocateOpenAIStyleId` collision loops to prevent a theoretical infinite spin.
+- **Hang hotpath diagnostics:** emit Beijing-time stage traces under the same monitor log directory (`jeikclaw-internal-*.log` / hang-hotpath-trace) for G-type hang correlation with external monitors.
+
 ## 2026.7.749
 
 ### Fixes
