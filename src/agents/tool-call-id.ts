@@ -4,6 +4,7 @@
  * Keeps provider-specific id formats replay-safe while preserving allowed native ids.
  */
 import { sha256HexPrefix } from "../infra/crypto-digest.js";
+import { hangHotpathLog } from "../logging/hang-hotpath-trace.js";
 import type { AgentMessage } from "./runtime/index.js";
 import { isThinkingLikeBlock } from "./thinking-block.js";
 import { isAllowedToolCallName, normalizeAllowedToolNames } from "./tool-call-shared.js";
@@ -302,13 +303,39 @@ function createOccurrenceAwareResolver(
   };
 
   const allocateOpenAIStyleId = (id: string, occurrence: number): string => {
-    for (let attempt = 0; ; attempt += 1) {
+    // Bound the loop: unrestricted for(;;) was a theoretical infinite hang if
+    // `used` were pathologically saturated. 1024 attempts + timestamp fallback
+    // matches makeUniqueToolId hygiene elsewhere in this file.
+    const MAX_ATTEMPTS = 1024;
+    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
       const candidate = `call_${shortHash(`${id}:${occurrence}:${attempt}`, 24)}`;
       if (!used.has(candidate)) {
+        if (attempt > 0) {
+          hangHotpathLog("allocateOpenAIStyleId", "after", {
+            occurrence,
+            attempt,
+            used_size: used.size,
+            ok: true,
+          });
+        }
         used.add(candidate);
         return candidate;
       }
     }
+    hangHotpathLog("allocateOpenAIStyleId", "warn", {
+      occurrence,
+      used_size: used.size,
+      max_attempts: MAX_ATTEMPTS,
+      reason: "hit_max_attempts_using_timestamp_fallback",
+    });
+    const fallback = `call_${shortHash(`${id}:${occurrence}:ts:${Date.now()}`, 24)}`;
+    used.add(fallback);
+    hangHotpathLog("allocateOpenAIStyleId", "after", {
+      occurrence,
+      ok: true,
+      fallback: true,
+    });
+    return fallback;
   };
 
   const allocatePreservingNativeAnthropicId = (id: string, occurrence: number): string => {
