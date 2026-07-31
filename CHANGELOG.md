@@ -2,6 +2,16 @@
 
 Docs: https://docs.openclaw.ai
 
+## 2026.7.751
+
+### Features
+
+- **Plugin SDK: outbound delivery context export** — `openclaw/plugin-sdk/outbound-runtime` now re-exports `appendOutboundMessageDeliveryContext`, `resolveMessageDeliveryContextMode`, `resolveOutboundSessionRoute`, and `ensureOutboundSessionEntry` so channel plugins (e.g. DingTalk) can append the same model-visible `outbound_message` rows as the built-in `message` tool after third-party CLI sends (DWS), without forking DWS itself.
+
+### Notes
+
+- Compatible with `@jeik/dingtalk-connector@0.8.33` `dwsDeliveryContext` (default `target`). Set channel config `dwsDeliveryContext: "off"` to disable.
+
 ## 2026.7.750
 
 ### Highlights
