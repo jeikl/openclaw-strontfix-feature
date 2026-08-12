@@ -39,13 +39,44 @@ import { renderRealtimeTalkConversation } from "./chat-realtime-controls.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
 import { renderWelcomeState, resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
 
-function renderThinkingPanelInline(text: string) {
+function renderThinkingPanelInline(
+  text: string,
+  opts?: { streaming?: boolean; durationMs?: number | null },
+) {
   return renderThinkingPanel({
     text,
     source: "reasoning_content",
-    streaming: true,
-    open: true,
+    streaming: opts?.streaming !== false,
+    open: opts?.streaming !== false,
+    durationMs: opts?.durationMs ?? null,
   });
+}
+
+function resolveThinkingDurationMs(
+  stages:
+    | Array<{
+        stage: string;
+        startedAt: number;
+        durationMs?: number | null;
+        active?: boolean;
+      }>
+    | null
+    | undefined,
+): number | null {
+  if (!stages?.length) {
+    return null;
+  }
+  const thinking = stages.find((s) => s.stage === "thinking");
+  if (!thinking) {
+    return null;
+  }
+  if (thinking.durationMs != null && Number.isFinite(thinking.durationMs)) {
+    return thinking.durationMs;
+  }
+  if (thinking.active) {
+    return Math.max(0, Date.now() - thinking.startedAt);
+  }
+  return null;
 }
 
 const pinnedMessagesMap = new Map<string, PinnedMessages>();
@@ -752,58 +783,59 @@ export function renderChatThread(props: ChatThreadProps) {
           ],
           () => {
             const coalesced = coalesceStreamRuns(chatItems);
-            const liveActive = (props.runStages ?? []).some((s) => s.active);
             const liveStages = props.runStages ?? [];
-            // Completed cards for this session (UI-only localStorage). Exclude pure-live
-            // duplicate while a turn is still running.
+            const liveActive = liveStages.some((s) => s.active);
+            const hasStreamRun = coalesced.some((it) => it.kind === "stream-run");
+            // Live card only while the turn is still in flight (active stage or stream).
+            const showLiveCard =
+              liveStages.length > 0 && (liveActive || props.stream != null || hasStreamRun);
+            // Completed cards (UI localStorage only). Skip in-progress duplicates.
             const historyCards = (props.runStageCards ?? []).filter((card) => {
               if (!card.stages.length) {
                 return false;
               }
-              if (liveActive && card.endedAt == null) {
+              if (showLiveCard && (card.endedAt == null || card.id === "live")) {
                 return false;
               }
-              return true;
+              return card.endedAt != null;
             });
-            // Assign each completed card to the first assistant group/stream-run at/after
-            // its start time (display only — never model context).
-            const usedCardIds = new Set<string>();
+            // Prefer anchoring above the assistant *group* (final bubble), not stream-run,
+            // so we don't leave an orphan card under the footer after materialize.
             const cardsBeforeKey = new Map<string, typeof historyCards>();
+            const usedCardIds = new Set<string>();
             for (const card of historyCards) {
-              const target = coalesced.find((it) => {
-                if (it.kind === "stream-run") {
-                  return true;
-                }
-                if (it.kind !== "group") {
-                  return false;
-                }
-                if (it.role !== "assistant") {
-                  return false;
-                }
-                const ts = it.timestamp ?? 0;
-                return ts >= card.startedAt - 2_000;
-              });
-              const key = target?.key ?? `__trailing__`;
               if (usedCardIds.has(card.id)) {
                 continue;
               }
+              const assistantTarget = coalesced.find(
+                (it) =>
+                  it.kind === "group" &&
+                  it.role === "assistant" &&
+                  (it.timestamp ?? 0) >= card.startedAt - 2_000,
+              );
+              const streamTarget = coalesced.find((it) => it.kind === "stream-run");
+              const target = assistantTarget ?? streamTarget;
+              if (!target) {
+                continue;
+              }
               usedCardIds.add(card.id);
-              const list = cardsBeforeKey.get(key) ?? [];
+              const list = cardsBeforeKey.get(target.key) ?? [];
               list.push(card);
-              cardsBeforeKey.set(key, list);
+              cardsBeforeKey.set(target.key, list);
             }
-            const trailingCards = cardsBeforeKey.get("__trailing__") ?? [];
-            const liveCard =
-              liveStages.length > 0
-                ? {
-                    id: "live",
-                    sessionKey: props.sessionKey,
-                    runId: null as string | null,
-                    startedAt: liveStages[0]?.startedAt ?? Date.now(),
-                    endedAt: null as number | null,
-                    stages: liveStages,
-                  }
-                : null;
+            // Cards with no message anchor yet (refresh mid-history edge): show once at end.
+            const trailingCards = historyCards.filter((c) => !usedCardIds.has(c.id));
+            const liveCard = showLiveCard
+              ? {
+                  id: "live",
+                  sessionKey: props.sessionKey,
+                  runId: null as string | null,
+                  startedAt: liveStages[0]?.startedAt ?? Date.now(),
+                  endedAt: null as number | null,
+                  stages: liveStages,
+                }
+              : null;
+            const liveThinkingMs = resolveThinkingDurationMs(liveStages);
 
             return html`
               ${repeat(
@@ -814,6 +846,10 @@ export function renderChatThread(props: ChatThreadProps) {
                   const stagePrefix = html`${cardsAbove.map((card) =>
                     renderRunStageCard(card, { live: false }),
                   )}`;
+                  const thinkingMsForGroup =
+                    cardsAbove.length > 0
+                      ? resolveThinkingDurationMs(cardsAbove[cardsAbove.length - 1]?.stages)
+                      : null;
                   if (item.kind === "divider") {
                     return html`
                       ${stagePrefix}
@@ -857,7 +893,10 @@ export function renderChatThread(props: ChatThreadProps) {
                         : nothing}
                       ${hasLiveThinking
                         ? html`<div class="chat-run-stage-card chat-run-stage-card--thinking">
-                            ${renderThinkingPanelInline(props.thinkingStream!)}
+                            ${renderThinkingPanelInline(props.thinkingStream!, {
+                              streaming: true,
+                              durationMs: liveThinkingMs,
+                            })}
                           </div>`
                         : nothing}
                       ${renderStreamGroup(item.parts, {
@@ -865,10 +904,8 @@ export function renderChatThread(props: ChatThreadProps) {
                         assistant: assistantIdentity,
                         basePath: props.basePath,
                         authToken: props.assistantAttachmentAuthToken ?? null,
-                        // Stream group also renders thinking when showReasoning;
-                        // live block above already shows wire thinking for diagnosis.
                         thinkingStream: null,
-                        showReasoning,
+                        showReasoning: false,
                       })}
                     `;
                   }
@@ -882,7 +919,10 @@ export function renderChatThread(props: ChatThreadProps) {
                         onOpenSidebar: props.onOpenSidebar,
                         sessionKey: props.sessionKey,
                         agentId: props.fullMessageAgentId,
+                        // WebUI-only diagnosis: still show thinking from message
+                        // blocks, but collapsed after final (see renderThinkingPanel).
                         showReasoning,
+                        thinkingDurationMs: thinkingMsForGroup,
                         showToolCalls: props.showToolCalls,
                         autoExpandToolCalls: Boolean(props.autoExpandToolCalls),
                         isToolMessageExpanded: (messageId: string) =>
@@ -921,16 +961,6 @@ export function renderChatThread(props: ChatThreadProps) {
                 },
               )}
               ${trailingCards.map((card) => renderRunStageCard(card, { live: false }))}
-              ${!coalesced.some((it) => it.kind === "stream-run") && liveCard
-                ? html`
-                    ${renderRunStageCard(liveCard, { live: true, nowMs: Date.now() })}
-                    ${hasLiveThinking
-                      ? html`<div class="chat-run-stage-card chat-run-stage-card--thinking">
-                          ${renderThinkingPanelInline(props.thinkingStream!)}
-                        </div>`
-                      : nothing}
-                  `
-                : nothing}
             `;
           },
         )}

@@ -572,19 +572,33 @@ function renderReadingIndicatorBubble() {
   `;
 }
 
+function formatThinkingDuration(ms: number | null | undefined): string | null {
+  if (ms == null || !Number.isFinite(ms) || ms < 0) {
+    return null;
+  }
+  if (ms < 10_000) {
+    return `${(ms / 1000).toFixed(1)}s`;
+  }
+  return `${Math.round(ms / 1000)}s`;
+}
+
 /** NewAPI-style collapsible reasoning panel (Control UI diagnosis only). */
 export function renderThinkingPanel(params: {
   text: string;
   source?: string;
   streaming?: boolean;
+  /** When false/omitted after final answer, panel starts collapsed. */
   open?: boolean;
+  /** Wall time spent in model thinking (shown next to title). */
+  durationMs?: number | null;
 }) {
   const text = params.text.trim();
   if (!text) {
     return nothing;
   }
-  const source = params.source?.trim() || "reasoning";
-  const open = params.open !== false;
+  // After final answer (not streaming), auto-collapse so the reply is primary.
+  const open = params.streaming === true ? true : params.open === true;
+  const durationLabel = formatThinkingDuration(params.durationMs);
   return html`
     <details class="chat-thinking-panel" ?open=${open}>
       <summary class="chat-thinking-panel__summary">
@@ -594,8 +608,13 @@ export function renderThinkingPanel(params: {
           ${params.streaming
             ? html`<span class="chat-thinking-panel__live" aria-label="streaming">…</span>`
             : nothing}
+          ${durationLabel
+            ? html`<span class="chat-thinking-panel__duration" title="思考耗时"
+                >${durationLabel}</span
+              >`
+            : nothing}
         </span>
-        <span class="chat-thinking-panel__source">来源: ${source}</span>
+        <span class="chat-thinking-panel__source">WebUI 仅展示</span>
       </summary>
       <div class="chat-thinking-panel__body">
         <pre class="chat-thinking-panel__text">${text}</pre>
@@ -670,6 +689,7 @@ type RenderMessageGroupOptions = {
   sessionKey?: string;
   agentId?: string;
   showReasoning: boolean;
+  thinkingDurationMs?: number | null;
   showToolCalls?: boolean;
   autoExpandToolCalls?: boolean;
   isToolMessageExpanded?: (messageId: string) => boolean | undefined;
@@ -706,6 +726,7 @@ function buildGroupedMessageRenderOptions(
     agentId: opts.agentId,
     duplicateCount: item.duplicateCount ?? 1,
     showReasoning: opts.showReasoning,
+    thinkingDurationMs: opts.thinkingDurationMs ?? null,
     showToolCalls: opts.showToolCalls ?? true,
     turnSucceeded: group.turnSucceeded,
     autoExpandToolCalls: opts.autoExpandToolCalls ?? false,
@@ -2030,6 +2051,8 @@ function renderGroupedMessage(
     agentId?: string;
     duplicateCount?: number;
     showReasoning: boolean;
+    /** Control UI only — thinking wall time next to the panel title. */
+    thinkingDurationMs?: number | null;
     showToolCalls?: boolean;
     turnSucceeded?: boolean;
     autoExpandToolCalls?: boolean;
@@ -2084,9 +2107,11 @@ function renderGroupedMessage(
   const thinkingPanel = extractedThinking
     ? renderThinkingPanel({
         text: extractedThinking,
-        source: "reasoningContent",
+        source: "reasoning_content",
+        // Finalized assistant messages start collapsed; live stream stays open.
         streaming: Boolean(opts.isStreaming),
-        open: true,
+        open: Boolean(opts.isStreaming),
+        durationMs: opts.thinkingDurationMs ?? null,
       })
     : null;
   // Keep legacy markdown helper for tests that still assert italic reasoning text.

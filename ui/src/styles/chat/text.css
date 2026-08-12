@@ -64,6 +64,17 @@
   animation: chat-thinking-pulse 1.2s ease-in-out infinite;
 }
 
+.chat-thinking-panel__duration {
+  margin-left: 6px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.18);
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+}
+
 .chat-thinking-panel__source {
   font-size: 12px;
   opacity: 0.9;

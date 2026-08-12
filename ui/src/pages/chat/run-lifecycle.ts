@@ -362,7 +362,9 @@ export function reconcileChatRunLifecycle(host: RunLifecycleHost, options: Recon
         saveRunStageCard(card);
         const prev = Array.isArray(hostAny.chatRunStageCards) ? hostAny.chatRunStageCards : [];
         hostAny.chatRunStageCards = [...prev.filter((c) => c.id !== card.id), card];
-        hostAny.chatRunStages = finalized;
+        // Clear live buffer so the thread only shows the persisted card once
+        // (avoids a second "orphan" card under the assistant footer).
+        hostAny.chatRunStages = [];
         hostAny.chatRunStageCardId = null;
       }
     } catch {
