@@ -9,6 +9,7 @@ import {
   type RunStageStoreEntry,
   type RunStageThinkingSegment,
 } from "../infra/run-stage-store.js";
+import { logInfo } from "../logger.js";
 
 type LiveCard = {
   id: string;
@@ -59,6 +60,9 @@ function flushCard(live: LiveCard): void {
     thinkingSegments: live.thinkingSegments.map((s) => ({ ...s })),
   };
   saveRunStageCardToStore(record);
+  // logInfo(
+  //   `[run-stage-card] flushCard id=${live.id} runId=${live.runId} stages=${live.stages.length} thinkingSegs=${live.thinkingSegments.length} endedAt=${live.endedAt}`,
+  // );
 }
 
 function ensureLive(evt: AgentEventPayload): LiveCard | null {
@@ -90,6 +94,7 @@ function ensureLive(evt: AgentEventPayload): LiveCard | null {
     thinkingStartedAt: null,
   };
   liveByRunId.set(runId, card);
+  // logInfo(`[run-stage-card] createLiveCard id=${card.id} runId=${runId} sessionKey=${sessionKey}`);
   return card;
 }
 

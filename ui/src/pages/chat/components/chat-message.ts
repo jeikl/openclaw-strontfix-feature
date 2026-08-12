@@ -1,5 +1,6 @@
 // Control UI chat module implements grouped render behavior.
 import { html, nothing } from "lit";
+import { ref } from "lit/directives/ref.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { until } from "lit/directives/until.js";
 import { resolveLocalUserName } from "../../../app/user-identity.ts";
@@ -45,6 +46,7 @@ import { stripThinkingTags } from "../../../lib/strip-thinking-tags.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 import { getSafeLocalStorage } from "../../../local-storage.ts";
 import { renderChatAvatar } from "../chat-avatar.ts";
+import { userCardToggleMap } from "../run-stage-ui.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
 import {
   renderExpandedToolCardContent,
@@ -584,6 +586,7 @@ function formatThinkingDuration(ms: number | null | undefined): string | null {
 
 /** NewAPI-style collapsible reasoning panel (Control UI diagnosis only). */
 export function renderThinkingPanel(params: {
+  id?: string;
   text: string;
   source?: string;
   streaming?: boolean;
@@ -596,11 +599,29 @@ export function renderThinkingPanel(params: {
   if (!text) {
     return nothing;
   }
-  // After final answer (not streaming), auto-collapse so the reply is primary.
-  const open = params.streaming === true ? true : params.open === true;
+  const id = params.id ? `thinking:${params.id}` : null;
+  let open: boolean;
+  if (id && userCardToggleMap.has(id)) {
+    open = userCardToggleMap.get(id)!;
+  } else if (params.open !== undefined) {
+    open = params.open;
+  } else if (params.streaming) {
+    open = true;
+  } else {
+    open = false;
+  }
   const durationLabel = formatThinkingDuration(params.durationMs);
   return html`
-    <details class="chat-thinking-panel" ?open=${open}>
+    <details
+      class="chat-thinking-panel"
+      ?open=${open}
+      @toggle=${(e: Event) => {
+        const details = e.currentTarget as HTMLDetailsElement;
+        if (id) {
+          userCardToggleMap.set(id, details.open);
+        }
+      }}
+    >
       <summary class="chat-thinking-panel__summary">
         <span class="chat-thinking-panel__title">
           <span class="chat-thinking-panel__icon" aria-hidden="true">◎</span>
@@ -616,7 +637,20 @@ export function renderThinkingPanel(params: {
         </span>
         <span class="chat-thinking-panel__source">WebUI 仅展示</span>
       </summary>
-      <div class="chat-thinking-panel__body">
+      <div
+        class="chat-thinking-panel__body"
+        @scroll=${(e: Event) => {
+          const el = e.currentTarget as HTMLElement;
+          (el as any)._userScrolledUp = el.scrollHeight - el.scrollTop - el.clientHeight >= 35;
+        }}
+        ${ref((el) => {
+          if (el && open && !(el as any)._userScrolledUp) {
+            requestAnimationFrame(() => {
+              el.scrollTop = el.scrollHeight;
+            });
+          }
+        })}
+      >
         <pre class="chat-thinking-panel__text">${text}</pre>
       </div>
     </details>
@@ -650,8 +684,8 @@ export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOpt
               ${renderThinkingPanel({
                 text: liveThinking,
                 source: "reasoningContent",
-                streaming: true,
-                open: true,
+                streaming: !hasStreamText,
+                open: !hasStreamText,
               })}
             </div>`
           : nothing}

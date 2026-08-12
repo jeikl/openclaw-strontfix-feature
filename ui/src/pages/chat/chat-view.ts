@@ -70,6 +70,8 @@ export type ChatProps = {
   runStages?: ChatRunStageEntry[] | null;
   /** Persisted per-session stage cards (Control UI only; not model context). */
   runStageCards?: ChatRunStageCard[] | null;
+  chatRunId?: string | null;
+  chatRunStageCardId?: string | null;
   streamStartedAt: number | null;
   assistantAvatarUrl?: string | null;
   draft: string;
@@ -175,6 +177,8 @@ export function renderChat(props: ChatProps) {
     thinkingStream: props.thinkingStream ?? null,
     runStages: props.runStages ?? null,
     runStageCards: props.runStageCards ?? null,
+    chatRunId: props.chatRunId ?? null,
+    chatRunStageCardId: props.chatRunStageCardId ?? null,
     streamStartedAt: props.streamStartedAt,
     queue: props.queue,
     showThinking: props.showThinking,

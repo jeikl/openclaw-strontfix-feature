@@ -119,6 +119,8 @@ type ChatThreadProps = {
   thinkingStream?: string | null;
   runStages?: import("../tool-stream.ts").ChatRunStageEntry[] | null;
   runStageCards?: import("../run-stage-ui.ts").ChatRunStageCard[] | null;
+  chatRunId?: string | null;
+  chatRunStageCardId?: string | null;
   streamStartedAt: number | null;
   queue: ChatQueueItem[];
   showThinking: boolean;
@@ -789,59 +791,127 @@ export function renderChatThread(props: ChatThreadProps) {
             // Live card only while the turn is still in flight (active stage or stream).
             const showLiveCard =
               liveStages.length > 0 && (liveActive || props.stream != null || hasStreamRun);
-            // Completed cards (UI localStorage only). Skip in-progress duplicates.
-            const historyCards = (props.runStageCards ?? []).filter((card) => {
+            // Completed cards + persistent cards. Skip in-progress or active run cards when live card is active.
+            const activeRunId = props.chatRunId;
+            const activeCardId = props.chatRunStageCardId;
+            const rawHistoryCards = (props.runStageCards ?? []).filter((card) => {
               if (!card.stages.length) {
                 return false;
               }
-              if (showLiveCard && (card.endedAt == null || card.id === "live")) {
+              if (
+                showLiveCard &&
+                (card.endedAt == null ||
+                  card.id === "live" ||
+                  (activeCardId && card.id === activeCardId) ||
+                  (activeRunId && card.runId === activeRunId))
+              ) {
                 return false;
               }
-              return card.endedAt != null;
+              return true;
             });
-            // Prefer anchoring above the assistant *group* (final bubble), not stream-run,
-            // so we don't leave an orphan card under the footer after materialize.
+            // Sort history cards by time so we process them chronologically.
+            const historyCards = [...rawHistoryCards].sort((a, b) => a.startedAt - b.startedAt);
+            // Anchor stage cards to message blocks. Cards in the same turn will group together.
             const cardsBeforeKey = new Map<string, typeof historyCards>();
+            const cardsAfterKey = new Map<string, typeof historyCards>();
             const usedCardIds = new Set<string>();
+
+            // We do NOT claim targets exclusively anymore, so multiple rounds in one turn
+            // can anchor to the same assistant message block.
+
+            // Group history cards by turn (anchoring to the User message that started the turn,
+            // or the first Assistant/Tool block of the turn).
             for (const card of historyCards) {
               if (usedCardIds.has(card.id)) {
                 continue;
               }
-              const assistantTarget = coalesced.find(
-                (it) =>
-                  it.kind === "group" &&
-                  it.role === "assistant" &&
-                  (it.timestamp ?? 0) >= card.startedAt - 2_000,
-              );
-              const streamTarget = coalesced.find((it) => it.kind === "stream-run");
-              const target = assistantTarget ?? streamTarget;
-              if (!target) {
+              // Find the User prompt that started this turn (User message ts <= card.startedAt)
+              let bestUserTarget: (typeof coalesced)[0] | null = null;
+              let minUserDiff = Infinity;
+              for (const it of coalesced) {
+                if (it.kind === "group" && it.role === "user") {
+                  const itTs = it.timestamp ?? 0;
+                  // The card should start after or very close to the user message
+                  if (itTs <= card.startedAt + 10_000) {
+                    const diff = Math.abs(card.startedAt - itTs);
+                    if (diff < minUserDiff) {
+                      minUserDiff = diff;
+                      bestUserTarget = it;
+                    }
+                  }
+                }
+              }
+
+              if (bestUserTarget) {
+                usedCardIds.add(card.id);
+                const existing = cardsAfterKey.get(bestUserTarget.key) ?? [];
+                cardsAfterKey.set(bestUserTarget.key, [...existing, card]);
                 continue;
               }
-              usedCardIds.add(card.id);
-              const list = cardsBeforeKey.get(target.key) ?? [];
-              list.push(card);
-              cardsBeforeKey.set(target.key, list);
+
+              // Fallback: If no user message found, find the VERY FIRST Assistant / Tool message group
+              let firstAsstTarget: (typeof coalesced)[0] | null = null;
+              for (const it of coalesced) {
+                if (
+                  (it.kind === "group" && (it.role === "assistant" || it.role === "tool")) ||
+                  it.kind === "stream-run"
+                ) {
+                  firstAsstTarget = it;
+                  break;
+                }
+              }
+
+              if (firstAsstTarget) {
+                usedCardIds.add(card.id);
+                const existing = cardsBeforeKey.get(firstAsstTarget.key) ?? [];
+                cardsBeforeKey.set(firstAsstTarget.key, [...existing, card]);
+                continue;
+              }
             }
-            // Cards with no message anchor yet (refresh mid-history edge): show once at end.
-            const trailingCards = historyCards.filter((c) => !usedCardIds.has(c.id));
             const liveThinkingText = props.thinkingStream?.trim() || null;
-            // Prefer in-memory card's saved thinking when live stream was cleared.
-            const liveMemCard = (props.runStageCards ?? []).find(
-              (c) => c.endedAt == null || (showLiveCard && c.id !== "live"),
-            );
+            // Prefer the persisted card's joined thinking (one segment per round
+            // with dividers); fall back to the raw live stream.
+            const liveMemCard = (props.runStageCards ?? []).find((c) => c.endedAt == null);
             const liveCard = showLiveCard
               ? {
                   id: "live",
                   sessionKey: props.sessionKey,
-                  runId: null as string | null,
+                  runId: props.chatRunId ?? null,
                   startedAt: liveStages[0]?.startedAt ?? Date.now(),
                   endedAt: null as number | null,
                   stages: liveStages,
-                  thinkingText: liveThinkingText || liveMemCard?.thinkingText || null,
+                  thinkingText: liveMemCard?.thinkingText || liveThinkingText || null,
                   thinkingDurationMs: resolveThinkingDurationMs(liveStages),
+                  thinkingSegments: liveMemCard?.thinkingSegments,
                 }
               : null;
+
+            // When a turn is live, attach liveCard directly to the active User message turn (at the top of the turn)
+            if (showLiveCard && liveCard) {
+              const lastUser = [...coalesced]
+                .reverse()
+                .find((it) => it.kind === "group" && it.role === "user");
+              if (lastUser) {
+                const existing = cardsAfterKey.get(lastUser.key) ?? [];
+                cardsAfterKey.set(lastUser.key, [...existing, liveCard]);
+              } else {
+                const firstAsst = coalesced.find(
+                  (it) =>
+                    (it.kind === "group" && (it.role === "assistant" || it.role === "tool")) ||
+                    it.kind === "stream-run",
+                );
+                if (firstAsst) {
+                  const existing = cardsBeforeKey.get(firstAsst.key) ?? [];
+                  cardsBeforeKey.set(firstAsst.key, [...existing, liveCard]);
+                }
+              }
+            }
+
+            // if (historyCards.length > 0 || showLiveCard) {
+            //   console.log(
+            //     `[RunStage Thread] historyCards=${historyCards.length}, showLiveCard=${showLiveCard}, liveStages=${liveStages.length}, liveCard=${Boolean(liveCard)}`,
+            //   );
+            // }
 
             return html`
               ${repeat(
@@ -849,19 +919,75 @@ export function renderChatThread(props: ChatThreadProps) {
                 (item) => item.key,
                 (item) => {
                   const cardsAbove = cardsBeforeKey.get(item.key) ?? [];
-                  const stagePrefix = html`${cardsAbove.map((card) =>
-                    renderRunStageCard(card, {
-                      live: false,
-                      // Historical: collapsed thinking with duration on the card itself.
-                      thinkingText: card.thinkingText,
-                      thinkingStreaming: false,
-                    }),
-                  )}`;
-                  const thinkingMsForGroup =
-                    cardsAbove.length > 0
-                      ? (cardsAbove[cardsAbove.length - 1]?.thinkingDurationMs ??
-                        resolveThinkingDurationMs(cardsAbove[cardsAbove.length - 1]?.stages))
-                      : null;
+                  const cardsBelow = cardsAfterKey.get(item.key) ?? [];
+
+                  // Multi-round turns produce one card per round on the backend.
+                  // We merge them here so that historically (and on refresh) they
+                  // collapse into a single stage list and a single thinking card.
+                  const mergeCards = (
+                    cards: typeof historyCards,
+                  ): (typeof historyCards)[0] | null => {
+                    if (cards.length === 0) return null;
+                    if (cards.length === 1) return cards[0];
+                    const mergedStages = cards.flatMap((c) => c.stages);
+                    const mergedSegments = cards.flatMap((c) => c.thinkingSegments ?? []);
+
+                    // Allow the UI helper to insert the dividers for the segments
+                    const mergedThinkingText =
+                      mergedSegments.length > 0
+                        ? null // joinThinkingSegmentsForDisplay will handle this inside renderRunStageCard if segments exist
+                        : cards
+                            .map((c) => c.thinkingText?.trim())
+                            .filter(Boolean)
+                            .join("\n\n");
+
+                    const totalThinkingMs =
+                      mergedSegments.reduce((sum, s) => sum + (s.durationMs ?? 0), 0) ||
+                      cards.reduce((sum, c) => sum + (c.thinkingDurationMs ?? 0), 0);
+
+                    return {
+                      ...cards[0],
+                      stages: mergedStages,
+                      thinkingSegments: mergedSegments,
+                      thinkingText: mergedThinkingText || null,
+                      thinkingDurationMs: totalThinkingMs > 0 ? totalThinkingMs : null,
+                      endedAt: cards[cards.length - 1].endedAt,
+                    };
+                  };
+
+                  const mergedAbove = mergeCards(cardsAbove);
+                  const mergedBelow = mergeCards(cardsBelow);
+                  const hasStreamText = Boolean(props.stream && props.stream.trim());
+
+                  const isLiveAbove = Boolean(
+                    mergedAbove &&
+                    showLiveCard &&
+                    (mergedAbove.id === "live" || mergedAbove.endedAt == null),
+                  );
+                  const isLiveBelow = Boolean(
+                    mergedBelow &&
+                    showLiveCard &&
+                    (mergedBelow.id === "live" || mergedBelow.endedAt == null),
+                  );
+
+                  const stagePrefix = mergedAbove
+                    ? html`${renderRunStageCard(mergedAbove, {
+                        live: isLiveAbove,
+                        nowMs: Date.now(),
+                        thinkingText: mergedAbove.thinkingText,
+                        thinkingStreaming: isLiveAbove && Boolean(liveThinkingText),
+                      })}`
+                    : nothing;
+
+                  const stageSuffix = mergedBelow
+                    ? html`${renderRunStageCard(mergedBelow, {
+                        live: isLiveBelow,
+                        nowMs: Date.now(),
+                        thinkingText: mergedBelow.thinkingText,
+                        thinkingStreaming: isLiveBelow && Boolean(liveThinkingText),
+                      })}`
+                    : nothing;
+
                   if (item.kind === "divider") {
                     return html`
                       ${stagePrefix}
@@ -900,21 +1026,12 @@ export function renderChatThread(props: ChatThreadProps) {
                   if (item.kind === "stream-run") {
                     return html`
                       ${stagePrefix}
-                      ${liveCard
-                        ? renderRunStageCard(liveCard, {
-                            live: true,
-                            nowMs: Date.now(),
-                            thinkingText: liveCard.thinkingText,
-                            thinkingStreaming: Boolean(liveThinkingText),
-                          })
-                        : nothing}
                       ${renderStreamGroup(item.parts, {
                         onOpenSidebar: props.onOpenSidebar,
                         assistant: assistantIdentity,
                         basePath: props.basePath,
                         authToken: props.assistantAttachmentAuthToken ?? null,
                         thinkingStream: null,
-                        // Thinking is on the stage card (WebUI-only); avoid a second copy.
                         showReasoning: false,
                       })}
                     `;
@@ -923,17 +1040,13 @@ export function renderChatThread(props: ChatThreadProps) {
                     if (deleted.has(item.key)) {
                       return nothing;
                     }
-                    // Prefer thinking on the stage card; only fall back to message
-                    // extractThinking when the card has no thinkingText.
-                    const cardHasThinking = cardsAbove.some((c) => Boolean(c.thinkingText?.trim()));
                     return html`
                       ${stagePrefix}
                       ${renderMessageGroup(item, {
                         onOpenSidebar: props.onOpenSidebar,
                         sessionKey: props.sessionKey,
                         agentId: props.fullMessageAgentId,
-                        showReasoning: showReasoning && !cardHasThinking,
-                        thinkingDurationMs: thinkingMsForGroup,
+                        showReasoning: false,
                         showToolCalls: props.showToolCalls,
                         autoExpandToolCalls: Boolean(props.autoExpandToolCalls),
                         isToolMessageExpanded: (messageId: string) =>
@@ -966,12 +1079,18 @@ export function renderChatThread(props: ChatThreadProps) {
                           requestUpdate();
                         },
                       })}
+                      ${item.role === "user" ? stageSuffix : nothing}
                     `;
                   }
                   return nothing;
                 },
               )}
-              ${trailingCards.map((card) => renderRunStageCard(card, { live: false }))}
+              ${(function () {
+                // Trailing cards (orphaned cards that failed to anchor to any message) are intentionally hidden.
+                // They represent aborted turns that have no corresponding messages in the chat history.
+                // Rendering them at the bottom would confuse the user and push the live stream up.
+                return nothing;
+              })()}
             `;
           },
         )}

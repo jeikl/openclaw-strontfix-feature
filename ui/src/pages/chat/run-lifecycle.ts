@@ -16,6 +16,7 @@ import { resetChatInputHistoryNavigation, type ChatInputHistoryState } from "./i
 import {
   appendThinkingToSegments,
   createRunStageCardId,
+  joinThinkingSegmentsForDisplay,
   saveRunStageCardEverywhere,
   sealOpenThinkingSegments,
   type ChatRunStageCard,
@@ -378,10 +379,7 @@ export function reconcileChatRunLifecycle(host: RunLifecycleHost, options: Recon
           endedAt,
           stages: finalized,
           thinkingText:
-            thinkingSegments
-              .map((s) => s.text.trim())
-              .filter(Boolean)
-              .join("\n\n---\n\n") ||
+            joinThinkingSegmentsForDisplay(thinkingSegments) ||
             thinkingText ||
             prevCard?.thinkingText ||
             null,

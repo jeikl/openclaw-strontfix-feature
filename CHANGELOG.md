@@ -2,6 +2,22 @@
 
 Docs: https://docs.openclaw.ai
 
+## 2026.7.752
+
+### Highlights
+
+- **阶段卡与思考卡渲染机制优化 (RunStage UI Optimization):** 彻底解决了多轮工具调用时卡片重复渲染、多次自动拉起收起的问题，实现回合开头单卡收拢与动态推流更新。
+
+### Fixes & Enhancements
+
+- **回合内单卡收拢 (Turn-Level Card Unification):** 多轮工具调用时，同一 Turn 内产生的阶段和思考内容统一收拢在 User 消息下方的开篇卡片中，避免在中间 Tool 消息块重复产生多张阶段卡。
+- **自动收起/展开消除 (No Mid-Turn Auto-Toggle):** 移除推流过程中根据 `!hasStreamText` 自动切换展开状态的逻辑，推流期间持续保持展开，用户手动控制 fold/unfold 状态被记忆，回合彻底结束时默认收起。
+- **阶梯式时间格式化 (Multi-Unit Stage Timing):** 小于 60 秒保持秒数/带小数跳秒，大于 60 秒自动格式化为 `1m5s`，大于 60 分钟自动格式化为 `1h3m6s`。
+- **轮次自动切分与序号 (Round Grouping & Badges):** 耗时面板根据 `等待模型首包` 节点自动划分轮次，并显示 `第 1 轮`、`第 2 轮` ... 视觉徽章与虚线分割线。
+- **中途刷新断线重连恢复 (Mid-Turn Refresh Recovery):** 解决执行中途刷新网页导致阶段卡丢失的 Bug，刷新后重新建立 WebSocket 时自动恢复并拼接刷新前的历史阶段。
+- **滚动条焦点追踪与 Scroll-Lock (Smart Scroll Lock):** 阶段卡和思考卡自动滚动跟随最新推流焦点；当用户手动向上滚动查看历史文本时自动触发 Scroll-Lock 暂停拉底，回底后自动恢复焦点追踪。
+- **日志清理与项目启动脚本 (Log Cleanup & CLI Mappings):** 注释掉后端控制台 `[run-stage-card]` 及前端 `[RunStage Thread]` 冗余日志；在 package.json 中新增 `jeikclaw` 命令与 `bin` 映射，全面支持 `pnpm jeikclaw gateway`。
+
 ## 2026.7.750
 
 ### Highlights

@@ -8,7 +8,7 @@ import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import {
   appendThinkingToSegments,
   createRunStageCardId,
-  saveRunStageCard,
+  joinThinkingSegmentsForDisplay,
   saveRunStageCardEverywhere,
   sealOpenThinkingSegments,
   type ChatRunStageCard,
@@ -379,7 +379,14 @@ function persistLiveRunStageCard(
       stages.length > 0
         ? stages.reduce((min, s) => Math.min(min, s.startedAt), stages[0].startedAt)
         : Date.now();
-    const allDone = stages.length > 0 && stages.every((s) => !s.active);
+    // A round is only "done" once its reply has completed. Checking just
+    // `every(!active)` would seal a card the moment a new round's `model_first`
+    // ends with nothing else started, which makes the live round render as a
+    // history card while it is still running.
+    const allDone =
+      stages.length > 0 &&
+      stages.some((s) => s.stage === "reply" && !s.active) &&
+      stages.every((s) => !s.active);
     const thinkingStage = stages.find((s) => s.stage === "thinking" && s.active);
     const thinkingText = hostAny.chatThinkingStream?.trim() || "";
     const prevCard = (hostAny.chatRunStageCards ?? []).find((c) => c.id === cardId);
@@ -406,10 +413,7 @@ function persistLiveRunStageCard(
         : null,
       stages: stages.map((s) => ({ ...s })),
       thinkingText:
-        thinkingSegments
-          .map((s) => s.text.trim())
-          .filter(Boolean)
-          .join("\n\n---\n\n") ||
+        joinThinkingSegmentsForDisplay(thinkingSegments) ||
         thinkingText ||
         prevCard?.thinkingText ||
         null,
@@ -432,6 +436,37 @@ function persistLiveRunStageCard(
 }
 
 function handleRunStageEvent(host: ToolStreamHost, payload: AgentEventPayload): void {
+  const hostAny = host as ToolStreamHost & {
+    chatRunStageCardId?: string | null;
+    chatRunStageCards?: ChatRunStageCard[];
+  };
+  if (payload.runId && payload.runId !== host.chatRunId) {
+    host.chatRunId = payload.runId;
+    // Do not change chatRunStageCardId or clear chatRunStages here.
+    // We want to accumulate ALL rounds for this turn onto the SAME card.
+    if (!hostAny.chatRunStageCardId) {
+      // Check if there is an in-flight card from chatRunStageCards (e.g. loaded from gateway after page refresh)
+      const existing = (hostAny.chatRunStageCards ?? []).find(
+        (c) => c.endedAt == null || c.stages.some((s) => s.active),
+      );
+      if (existing) {
+        hostAny.chatRunStageCardId = existing.id;
+        if (host.chatRunStages.length === 0 && existing.stages.length > 0) {
+          host.chatRunStages = existing.stages.map((s) => ({ ...s }));
+        }
+      } else {
+        hostAny.chatRunStageCardId = createRunStageCardId(payload.runId);
+      }
+    }
+  }
+  if (host.chatRunStages.length === 0 && hostAny.chatRunStageCardId) {
+    const existing = (hostAny.chatRunStageCards ?? []).find(
+      (c) => c.id === hostAny.chatRunStageCardId,
+    );
+    if (existing?.stages?.length) {
+      host.chatRunStages = existing.stages.map((s) => ({ ...s }));
+    }
+  }
   const data = payload.data ?? {};
   const stage = typeof data.stage === "string" ? data.stage.trim() : "";
   if (!stage) {
@@ -446,34 +481,25 @@ function handleRunStageEvent(host: ToolStreamHost, payload: AgentEventPayload): 
         ? payload.ts
         : Date.now();
   if (phase === "start") {
-    // New thinking stage → seal prior thinking burst so multi-round stays readable.
+    // One stage card + one thinking card for the whole turn: stages keep
+    // appending to the same card. A new thinking burst just seals the previous
+    // round's thinking segment (so the thinking card shows one segment per round
+    // with a prominent divider) and resets the stream buffer to the new round.
     if (stage === "thinking") {
       const hostAny = host as ToolStreamHost & {
         chatThinkingStream?: string | null;
-        chatRunStageCardId?: string | null;
-        chatRunStageCards?: ChatRunStageCard[];
-        sessionKey?: string;
-        chatRunId?: string | null;
+        chatThinkingStreamBase?: string | null;
+        chatThinkingNewRoundPending?: boolean;
       };
-      const stagesNow = Array.isArray(host.chatRunStages) ? host.chatRunStages : [];
-      if (hostAny.chatThinkingStream?.trim()) {
-        persistLiveRunStageCard(host, stagesNow);
-      }
-      const cardId = hostAny.chatRunStageCardId;
-      if (cardId && Array.isArray(hostAny.chatRunStageCards)) {
-        hostAny.chatRunStageCards = hostAny.chatRunStageCards.map((c) => {
-          if (c.id !== cardId) {
-            return c;
-          }
-          const sealed = sealOpenThinkingSegments(c.thinkingSegments);
-          return { ...c, thinkingSegments: sealed };
-        });
-        const updated = hostAny.chatRunStageCards.find((c) => c.id === cardId);
-        if (updated) {
-          saveRunStageCard(updated);
-        }
-      }
+      // Remember prior rounds' full text so cumulative thinking payloads can be
+      // stripped down to the current round's text.
+      hostAny.chatThinkingStreamBase =
+        (hostAny.chatThinkingStreamBase ?? "") + (hostAny.chatThinkingStream ?? "");
       hostAny.chatThinkingStream = "";
+      // If there was already thinking, the next token starts a new segment.
+      if (hostAny.chatThinkingStreamBase.trim()) {
+        hostAny.chatThinkingNewRoundPending = true;
+      }
     }
     upsertRunStage(host, {
       stage,
@@ -500,6 +526,10 @@ function handleRunStageEvent(host: ToolStreamHost, payload: AgentEventPayload): 
       durationMs,
       active: false,
     });
+    // Keep the persisted card in sync with completed stages so a finished round
+    // shows its full stage list (and collapses) before the next round starts.
+    const stages = Array.isArray(host.chatRunStages) ? host.chatRunStages : [];
+    persistLiveRunStageCard(host, stages);
   }
 }
 
@@ -507,13 +537,19 @@ function handleRunStageEvent(host: ToolStreamHost, payload: AgentEventPayload): 
 export function resolveThinkingStreamText(
   previous: string | null | undefined,
   data: Record<string, unknown> | undefined,
+  baseText?: string | null,
 ): string | null {
   if (!data || typeof data !== "object") {
     return previous ?? null;
   }
-  const nextText = typeof data.text === "string" ? data.text : "";
+  let nextText = typeof data.text === "string" ? data.text : "";
   const nextDelta = typeof data.delta === "string" ? data.delta : "";
   const prev = typeof previous === "string" ? previous : "";
+
+  if (baseText && nextText.startsWith(baseText)) {
+    nextText = nextText.slice(baseText.length);
+  }
+
   if (nextText) {
     if (!prev || nextText.startsWith(prev) || nextText.length >= prev.length) {
       return nextText;
@@ -917,22 +953,62 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
     return;
   }
 
+  // Detect runId changes early for all streams so we can clear live buffers if a new run starts.
+  if (payload.runId && payload.runId !== host.chatRunId) {
+    if (
+      payload.stream === "thinking" ||
+      payload.stream === "run_stage" ||
+      payload.stream === "tool"
+    ) {
+      const hostAny = host as ToolStreamHost & {
+        chatThinkingStream?: string | null;
+        chatThinkingStreamBase?: string | null;
+        chatThinkingNewRoundPending?: boolean;
+        chatRunStageCardId?: string | null;
+        chatRunStageCards?: ChatRunStageCard[];
+      };
+      host.chatRunId = payload.runId;
+      // Do not change chatRunStageCardId or clear chatRunStages here.
+      // We want to accumulate ALL rounds for this turn onto the SAME card.
+      if (!hostAny.chatRunStageCardId) {
+        hostAny.chatRunStageCardId = createRunStageCardId(payload.runId);
+      }
+      hostAny.chatThinkingStream = null;
+      hostAny.chatThinkingStreamBase = "";
+      hostAny.chatThinkingNewRoundPending = false;
+    }
+  }
+
   // Live reasoning/thinking tokens (WebUI diagnosis only).
   if (payload.stream === "thinking") {
-    const next = resolveThinkingStreamText(host.chatThinkingStream, payload.data ?? {});
+    const hostAny = host as ToolStreamHost & {
+      chatThinkingStreamBase?: string | null;
+      chatThinkingNewRoundPending?: boolean;
+    };
+    const next = resolveThinkingStreamText(
+      host.chatThinkingStream,
+      payload.data ?? {},
+      hostAny.chatThinkingStreamBase,
+    );
     if (typeof next === "string" && next.length > 0) {
       host.chatThinkingStream = next;
       if (!host.chatStreamStartedAt) {
         host.chatStreamStartedAt = Date.now();
       }
+      // A fresh thinking burst after prior rounds starts a new segment so the
+      // thinking card shows one segment per round with a prominent divider.
+      const forceNew = hostAny.chatThinkingNewRoundPending === true;
+      hostAny.chatThinkingNewRoundPending = false;
       // Persist thinking text onto the session stage card so it survives finalize/refresh.
       const stages = Array.isArray(host.chatRunStages) ? host.chatRunStages : [];
-      persistLiveRunStageCard(host, stages);
+      persistLiveRunStageCard(host, stages, { forceNewThinkingSegment: forceNew });
     }
     return;
   }
 
   if (payload.stream === "run_stage") {
+    // We already handled runId changes above, so handleRunStageEvent doesn't need to do it,
+    // but handleRunStageEvent is resilient and its own check will be a no-op if already matching.
     handleRunStageEvent(host, payload);
     return;
   }

@@ -1,5 +1,7 @@
 // @vitest-environment node
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { reconcileChatRunLifecycle } from "./run-lifecycle.ts";
+import type { ChatRunStageCard } from "./run-stage-ui.ts";
 import {
   handleAgentEvent,
   handleSessionOperationEvent,
@@ -583,6 +585,202 @@ describe("app-tool-stream fallback lifecycle handling", () => {
 
     expect(host.compactionStatus).toBeNull();
     expect(host.compactionClearTimer).toBeNull();
+
+    vi.useRealTimers();
+  });
+
+  function emitStage(
+    host: MutableHost,
+    stage: string,
+    label: string,
+    phase: "start" | "end",
+    startedAt: number,
+    endedAt?: number,
+  ) {
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 0, "run_stage", {
+        stage,
+        label,
+        phase,
+        startedAt,
+        ...(endedAt !== undefined ? { endedAt } : {}),
+      }),
+    );
+  }
+
+  function stageNames(card: ChatRunStageCard): string[] {
+    return card.stages.map((s) => s.stage);
+  }
+
+  function thinkingTexts(card: ChatRunStageCard): string[] {
+    return (card.thinkingSegments ?? []).map((s) => s.text.trim()).filter(Boolean);
+  }
+
+  it("keeps ONE accumulated card across multi-round thinking with round dividers", () => {
+    useToolStreamFakeTimers();
+    const host = createHost();
+
+    // Round 1: prep stages, then thinking -> tool -> reply.
+    emitStage(host, "startup", "启动/鉴权/插件", "start", TOOL_STREAM_TEST_NOW + 1);
+    emitStage(host, "sanitize", "历史修复 sanitize", "start", TOOL_STREAM_TEST_NOW + 2);
+    emitStage(host, "prompt", "组装 prompt", "start", TOOL_STREAM_TEST_NOW + 3);
+    emitStage(host, "model_first", "等待模型首包", "start", TOOL_STREAM_TEST_NOW + 4);
+    emitStage(
+      host,
+      "model_first",
+      "等待模型首包",
+      "end",
+      TOOL_STREAM_TEST_NOW + 4,
+      TOOL_STREAM_TEST_NOW + 50,
+    );
+    emitStage(host, "thinking", "模型思考", "start", TOOL_STREAM_TEST_NOW + 51);
+    handleAgentEvent(host, agentEvent("run-1", 0, "thinking", { text: "第一轮思考" }));
+    emitStage(
+      host,
+      "thinking",
+      "模型思考",
+      "end",
+      TOOL_STREAM_TEST_NOW + 51,
+      TOOL_STREAM_TEST_NOW + 100,
+    );
+    emitStage(host, "tool", "工具执行 · cron", "start", TOOL_STREAM_TEST_NOW + 101);
+    emitStage(
+      host,
+      "tool",
+      "工具执行 · cron",
+      "end",
+      TOOL_STREAM_TEST_NOW + 101,
+      TOOL_STREAM_TEST_NOW + 200,
+    );
+    emitStage(host, "reply", "模型正文输出", "start", TOOL_STREAM_TEST_NOW + 201);
+    emitStage(
+      host,
+      "reply",
+      "模型正文输出",
+      "end",
+      TOOL_STREAM_TEST_NOW + 201,
+      TOOL_STREAM_TEST_NOW + 300,
+    );
+
+    // Round 2 starts with model_first: stages keep APPENDING to the same card.
+    emitStage(host, "model_first", "等待模型首包", "start", TOOL_STREAM_TEST_NOW + 301);
+    expect((host.chatRunStages ?? []).map((s) => s.stage)).toEqual([
+      "startup",
+      "sanitize",
+      "prompt",
+      "model_first",
+      "thinking",
+      "tool",
+      "reply",
+      "model_first",
+    ]);
+    emitStage(
+      host,
+      "model_first",
+      "等待模型首包",
+      "end",
+      TOOL_STREAM_TEST_NOW + 301,
+      TOOL_STREAM_TEST_NOW + 350,
+    );
+    emitStage(host, "thinking", "模型思考", "start", TOOL_STREAM_TEST_NOW + 351);
+    handleAgentEvent(host, agentEvent("run-1", 0, "thinking", { text: "第二轮思考" }));
+    emitStage(
+      host,
+      "thinking",
+      "模型思考",
+      "end",
+      TOOL_STREAM_TEST_NOW + 351,
+      TOOL_STREAM_TEST_NOW + 400,
+    );
+    emitStage(host, "tool", "工具调用 · exec2", "start", TOOL_STREAM_TEST_NOW + 401);
+    emitStage(
+      host,
+      "tool",
+      "工具调用 · exec2",
+      "end",
+      TOOL_STREAM_TEST_NOW + 401,
+      TOOL_STREAM_TEST_NOW + 500,
+    );
+    emitStage(host, "reply", "模型正文输出", "start", TOOL_STREAM_TEST_NOW + 501);
+    emitStage(
+      host,
+      "reply",
+      "模型正文输出",
+      "end",
+      TOOL_STREAM_TEST_NOW + 501,
+      TOOL_STREAM_TEST_NOW + 600,
+    );
+
+    // The live stream buffer holds only the CURRENT round's thinking.
+    expect(host.chatThinkingStream).toBe("第二轮思考");
+
+    // Finalize the turn the same way run completion does.
+    reconcileChatRunLifecycle(host as unknown as Parameters<typeof reconcileChatRunLifecycle>[0], {
+      clearChatStream: true,
+    });
+    expect((host.chatRunStages ?? []).map((s) => s.stage)).toEqual([]);
+
+    const cards =
+      (host as unknown as { chatRunStageCards?: ChatRunStageCard[] }).chatRunStageCards ?? [];
+    // Exactly ONE card for the whole turn — no round cards.
+    expect(cards.map((c) => c.id)).toEqual(["stage-card:run-1"]);
+
+    const card = cards[0];
+    expect(stageNames(card!)).toEqual([
+      "startup",
+      "sanitize",
+      "prompt",
+      "model_first",
+      "thinking",
+      "tool",
+      "reply",
+      "model_first",
+      "thinking",
+      "tool",
+      "reply",
+    ]);
+    // One thinking segment per round.
+    expect(thinkingTexts(card!)).toEqual(["第一轮思考", "第二轮思考"]);
+    // The joined thinking card contains a prominent round divider.
+    expect(card!.thinkingText).toContain("第 2 轮思考");
+    expect(card!.thinkingText).toContain("第一轮思考");
+    expect(card!.thinkingText).toContain("第二轮思考");
+    expect(card!.stages.every((s) => !s.active)).toBe(true);
+
+    vi.useRealTimers();
+  });
+
+  it("keeps prep stages on the first card when a run has a single thinking burst", () => {
+    useToolStreamFakeTimers();
+    const host = createHost();
+
+    emitStage(host, "startup", "启动", "start", TOOL_STREAM_TEST_NOW + 1);
+    emitStage(host, "thinking", "模型思考", "start", TOOL_STREAM_TEST_NOW + 2);
+    handleAgentEvent(host, agentEvent("run-1", 0, "thinking", { text: "单轮思考" }));
+    emitStage(
+      host,
+      "thinking",
+      "模型思考",
+      "end",
+      TOOL_STREAM_TEST_NOW + 2,
+      TOOL_STREAM_TEST_NOW + 50,
+    );
+    emitStage(host, "reply", "模型正文输出", "start", TOOL_STREAM_TEST_NOW + 51);
+    emitStage(
+      host,
+      "reply",
+      "模型正文输出",
+      "end",
+      TOOL_STREAM_TEST_NOW + 51,
+      TOOL_STREAM_TEST_NOW + 100,
+    );
+
+    const cards =
+      (host as unknown as { chatRunStageCards?: ChatRunStageCard[] }).chatRunStageCards ?? [];
+    expect(cards.map((c) => c.id)).toEqual(["stage-card:run-1"]);
+    expect(stageNames(cards[0]!)).toEqual(["startup", "thinking", "reply"]);
+    expect(thinkingTexts(cards[0]!)).toEqual(["单轮思考"]);
 
     vi.useRealTimers();
   });

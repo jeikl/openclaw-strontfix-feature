@@ -1,6 +1,6 @@
 {
   "name": "jeikclaw",
-  "version": "2026.7.750",
+  "version": "2026.7.752",
   "publishConfig": {
     "registry": "https://registry.npmjs.org/"
   },
@@ -17,6 +17,7 @@
     "url": "git+https://github.com/openclaw/openclaw.git"
   },
   "bin": {
+    "openclaw": "openclaw.mjs",
     "jeikclaw": "openclaw.mjs"
   },
   "directories": {
@@ -1702,6 +1703,7 @@
     "mobile:release:preflight": "node --import tsx scripts/mobile-release-ref.ts preflight",
     "mobile:release:record": "node --import tsx scripts/mobile-release-ref.ts record",
     "mobile:release:resolve": "node --import tsx scripts/mobile-release-ref.ts resolve",
+    "jeikclaw": "node scripts/run-node.mjs",
     "openclaw": "node scripts/run-node.mjs",
     "openclaw:rpc": "node scripts/run-node.mjs agent --mode rpc --json",
     "perf:issue-78851": "node --import tsx scripts/perf/issue-78851-model-resolution.ts",
