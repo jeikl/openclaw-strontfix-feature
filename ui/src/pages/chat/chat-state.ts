@@ -162,6 +162,7 @@ export type ChatPageHost = ChatHost &
     chatSendTimingsByRun: Map<string, ChatSendTimingEntry>;
     chatStreamSegments: Array<{ text: string; ts: number }>;
     chatThinkingStream: string | null;
+    chatRunStages: import("./tool-stream.ts").ChatRunStageEntry[];
     toolStreamById: Map<string, ToolStreamEntry>;
     toolStreamOrder: string[];
     toolStreamSyncTimer: number | null;
@@ -342,6 +343,7 @@ export function resetChatStateForRouteSession(state: ChatPageHost, sessionKey: s
   state.chatVerboseLevel = null;
   state.chatStream = null;
   state.chatThinkingStream = null;
+  state.chatRunStages = [];
   state.chatSideResult = null;
   state.lastError = null;
   state.chatError = null;
@@ -996,6 +998,7 @@ export function createPageState(
     chatRunId: null,
     chatStream: null,
     chatThinkingStream: null,
+    chatRunStages: [],
     chatStreamStartedAt: null,
     lastError: null,
     chatError: null,
@@ -1174,6 +1177,7 @@ export function handlePageGatewayEvent(state: ChatPageHost, event: GatewayEventF
   if (event.event === "agent" || event.event === "session.tool") {
     handleAgentEvent(state as never, event.payload as never);
     requestPageUpdate(state);
+    ensureRunStageTicker(state);
     return;
   }
   if (event.event === "session.operation") {
@@ -1198,6 +1202,37 @@ export function handlePageGatewayEvent(state: ChatPageHost, event: GatewayEventF
 
 function requestPageUpdate(state: ChatPageHost) {
   state.requestUpdate?.();
+}
+
+const runStageTickerByState = new WeakMap<object, number>();
+
+/** Refresh active stage timers once per second while a run is in progress. */
+function ensureRunStageTicker(state: ChatPageHost) {
+  const stages = state.chatRunStages;
+  const hasActive = Array.isArray(stages) && stages.some((s) => s.active);
+  const existing = runStageTickerByState.get(state);
+  if (!hasActive) {
+    if (existing != null) {
+      globalThis.clearInterval(existing);
+      runStageTickerByState.delete(state);
+    }
+    return;
+  }
+  if (existing != null) {
+    return;
+  }
+  const timer = globalThis.setInterval(() => {
+    const current = state.chatRunStages;
+    if (!Array.isArray(current) || !current.some((s) => s.active)) {
+      globalThis.clearInterval(timer);
+      runStageTickerByState.delete(state);
+      return;
+    }
+    // Force a shallow copy so Lit re-renders elapsed seconds.
+    state.chatRunStages = current.map((s) => ({ ...s }));
+    requestPageUpdate(state);
+  }, 250) as unknown as number;
+  runStageTickerByState.set(state, timer);
 }
 
 export class ChatStateController<TState extends ChatPageHost> implements ReactiveController {

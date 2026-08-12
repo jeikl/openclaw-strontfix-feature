@@ -609,6 +609,12 @@ async function sendQueuedChatMessage(
   registerChatSendTiming(host, sendingItem, runId, requestStartedAtMs);
   recordChatSendTiming(host, sendingItem, "request-start", sendingItem.sendSubmittedAtMs);
   host.chatSending = true;
+  if ("chatRunStages" in host) {
+    (host as { chatRunStages?: unknown[] }).chatRunStages = [];
+  }
+  if ("chatThinkingStream" in host) {
+    (host as { chatThinkingStream?: string | null }).chatThinkingStream = null;
+  }
   const isVisibleSession = () => visibleSessionMatches(host, sessionKey, prepared.agentId);
   if (isVisibleSession()) {
     setChatError(host, null);

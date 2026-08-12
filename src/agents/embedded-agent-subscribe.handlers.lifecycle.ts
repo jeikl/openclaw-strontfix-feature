@@ -27,6 +27,7 @@ import {
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
 import { isPromiseLike } from "./embedded-agent-subscribe.promise.js";
 import { isAssistantMessage } from "./embedded-agent-utils.js";
+import { endAllRunStages } from "./run-stage-progress.js";
 import type { AgentSessionEvent } from "./sessions/index.js";
 import { summarizeToolValidationError } from "./tool-error-summary.js";
 
@@ -222,6 +223,12 @@ export function handleAgentEnd(
         ...(livenessState ? { livenessState } : {}),
         ...(replayInvalid ? { replayInvalid } : {}),
       },
+    });
+    endAllRunStages({
+      runId: ctx.params.runId,
+      sessionKey: ctx.params.sessionKey,
+      agentId: ctx.params.agentId,
+      sessionId: ctx.params.sessionId,
     });
   };
 

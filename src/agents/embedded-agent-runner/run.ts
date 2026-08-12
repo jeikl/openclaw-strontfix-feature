@@ -135,6 +135,7 @@ import {
   applyAgentRunSessionTargetIdentity,
   resolveAgentRunSessionTarget,
 } from "../run-session-target.js";
+import { beginRunStage, endRunStage } from "../run-stage-progress.js";
 import { createAgentRunDirectAbortError } from "../run-termination.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
 import { buildAgentRuntimePlan } from "../runtime-plan/build.js";
@@ -967,6 +968,13 @@ async function runEmbeddedAgentInternal(
       };
       params.onExecutionStarted?.({ lifecycleGeneration });
       notifyExecutionPhase("runner_entered");
+      beginRunStage({
+        runId: params.runId,
+        sessionKey: params.sessionKey,
+        agentId: params.agentId,
+        sessionId: params.sessionId,
+        stage: "startup",
+      });
       const workspaceResolution = resolveRunWorkspaceDir({
         workspaceDir: params.workspaceDir,
         sessionKey: params.sessionKey,
@@ -2082,6 +2090,22 @@ async function runEmbeddedAgentInternal(
             startupStages.mark(EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE.runtimePlan);
             startupStages.mark(EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE.dispatch);
             notifyExecutionPhase("attempt_dispatch", { provider, model: modelId });
+            endRunStage({
+              runId: params.runId,
+              sessionKey: params.sessionKey,
+              agentId: params.agentId,
+              sessionId: params.sessionId,
+              stage: "startup",
+            });
+            // Covers tools/system-prompt/session prep until model_call_started.
+            beginRunStage({
+              runId: params.runId,
+              sessionKey: params.sessionKey,
+              agentId: params.agentId,
+              sessionId: params.sessionId,
+              stage: "prompt",
+              detail: "tools / system prompt / session",
+            });
             emitStartupStageSummary(EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE.dispatch);
             startupStagesEmitted = true;
           }

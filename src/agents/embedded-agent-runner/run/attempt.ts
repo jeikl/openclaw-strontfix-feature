@@ -195,6 +195,7 @@ import { wrapStreamFnTextTransforms } from "../../plugin-text-transforms.js";
 import { resolveAgentPromptSurfaceForSessionKey } from "../../prompt-surface.js";
 import { describeProviderRequestRoutingSummary } from "../../provider-attribution.js";
 import { registerProviderStreamForModel } from "../../provider-stream.js";
+import { beginRunStage, endRunStage } from "../../run-stage-progress.js";
 import {
   AGENT_RUN_RESTART_ABORT_STOP_REASON,
   createAgentRunRestartAbortError,
@@ -3295,6 +3296,19 @@ export async function runEmbeddedAttempt(
           contentCapture: resolveDiagnosticModelContentCapturePolicy(params.config),
           nextCallId: () => `${params.runId}:model:${(diagnosticModelCallSeq += 1)}`,
           onStarted: () => {
+            endRunStage({
+              runId: params.runId,
+              sessionKey: params.sessionKey,
+              sessionId: params.sessionId,
+              stage: "prompt",
+            });
+            beginRunStage({
+              runId: params.runId,
+              sessionKey: params.sessionKey,
+              sessionId: params.sessionId,
+              stage: "model_first",
+              detail: `${params.provider}/${params.modelId}`,
+            });
             params.onExecutionPhase?.({
               phase: "model_call_started",
               provider: params.provider,
@@ -3314,20 +3328,38 @@ export async function runEmbeddedAttempt(
             system: systemPromptText,
           });
         } else {
-          const prior = await sanitizeSessionHistory({
-            messages: activeSession.messages,
-            modelApi: params.model.api,
-            modelId: params.modelId,
-            provider: params.provider,
-            allowedToolNames: replayAllowedToolNames,
-            config: params.config,
-            workspaceDir: effectiveWorkspace,
-            env: process.env,
-            model: params.model,
-            sessionManager,
+          beginRunStage({
+            runId: params.runId,
+            sessionKey: params.sessionKey,
             sessionId: params.sessionId,
-            policy: transcriptPolicy,
+            stage: "sanitize",
+            detail: `${activeSession.messages.length} msgs`,
           });
+          let prior: Awaited<ReturnType<typeof sanitizeSessionHistory>>;
+          try {
+            prior = await sanitizeSessionHistory({
+              messages: activeSession.messages,
+              modelApi: params.model.api,
+              modelId: params.modelId,
+              provider: params.provider,
+              allowedToolNames: replayAllowedToolNames,
+              config: params.config,
+              workspaceDir: effectiveWorkspace,
+              env: process.env,
+              model: params.model,
+              sessionManager,
+              sessionId: params.sessionId,
+              policy: transcriptPolicy,
+            });
+          } finally {
+            endRunStage({
+              runId: params.runId,
+              sessionKey: params.sessionKey,
+              sessionId: params.sessionId,
+              stage: "sanitize",
+              detail: `${activeSession.messages.length} msgs`,
+            });
+          }
           cacheTrace?.recordStage("session:sanitized", { messages: prior });
           const validated = await validateReplayTurns({
             messages: prior,

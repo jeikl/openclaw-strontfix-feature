@@ -7,6 +7,7 @@ import { emitAgentEvent } from "../infra/agent-events.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { stripStaleAssistantUsageBeforeLatestCompaction } from "./compaction-usage.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
+import { beginRunStage, endRunStage } from "./run-stage-progress.js";
 import type { AgentSessionEvent } from "./sessions/index.js";
 
 type SessionCompactionStartEvent = Extract<AgentSessionEvent, { type: "compaction_start" }>;
@@ -62,6 +63,14 @@ export function handleCompactionStart(
     runId: ctx.params.runId,
     stream: "compaction",
     data: { phase: "start" },
+  });
+  beginRunStage({
+    runId: ctx.params.runId,
+    sessionKey: ctx.params.sessionKey,
+    agentId: ctx.params.agentId,
+    sessionId: ctx.params.sessionId,
+    stage: "compaction",
+    detail: reason,
   });
   void ctx.params.onAgentEvent?.({
     stream: "compaction",
@@ -153,6 +162,14 @@ export function handleCompactionEnd(ctx: EmbeddedAgentSubscribeContext, evt: Com
     stream: "compaction",
     data: { phase: "end", willRetry, completed: hasResult && !wasAborted },
   });
+  endRunStage({
+    runId: ctx.params.runId,
+    sessionKey: ctx.params.sessionKey,
+    agentId: ctx.params.agentId,
+    sessionId: ctx.params.sessionId,
+    stage: "compaction",
+    detail: reason,
+  });
   void ctx.params.onAgentEvent?.({
     stream: "compaction",
     data: { phase: "end", willRetry, completed: hasResult && !wasAborted },
@@ -187,9 +204,8 @@ async function reconcileSessionStoreCompactionCountAfterSuccess(params: {
   observedCompactionCount: number;
   now?: number;
 }): Promise<number | undefined> {
-  const { default: reconcile } = await import(
-    "./embedded-agent-subscribe.handlers.compaction.runtime.js"
-  );
+  const { default: reconcile } =
+    await import("./embedded-agent-subscribe.handlers.compaction.runtime.js");
   return reconcile(params);
 }
 

@@ -55,6 +55,7 @@ import {
 import type { SubscribeEmbeddedAgentSessionParams } from "./embedded-agent-subscribe.types.js";
 import { stripDowngradedToolCallText, THINKING_TAG_SCAN_RE } from "./embedded-agent-utils.js";
 import { mediaUrlsFromGeneratedAttachments } from "./generated-attachments.js";
+import { beginRunStage, endRunStage } from "./run-stage-progress.js";
 import type { AgentRunTimeoutPhase } from "./run-timeout-attribution.js";
 import type { AgentMessage } from "./runtime/index.js";
 import { hasNonzeroUsage, normalizeUsage, type UsageLike } from "./usage.js";
@@ -273,6 +274,27 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     delivery: EmbeddedAgentSubscribeContext["state"]["deferredAssistantEvents"][number],
   ) => {
     const { data } = delivery;
+    endRunStage({
+      runId: params.runId,
+      sessionKey: params.sessionKey,
+      agentId: params.agentId,
+      sessionId: params.sessionId,
+      stage: "model_first",
+    });
+    endRunStage({
+      runId: params.runId,
+      sessionKey: params.sessionKey,
+      agentId: params.agentId,
+      sessionId: params.sessionId,
+      stage: "thinking",
+    });
+    beginRunStage({
+      runId: params.runId,
+      sessionKey: params.sessionKey,
+      agentId: params.agentId,
+      sessionId: params.sessionId,
+      stage: "reply",
+    });
     emitAgentEvent({
       runId: params.runId,
       stream: "assistant",
@@ -1192,6 +1214,20 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     // archive. /reasoning (streamReasoning) gates only the rendering hook
     // below; display surfaces (TUI showThinking, webchat isReasoning drops)
     // gate presentation on their side.
+    endRunStage({
+      runId: params.runId,
+      sessionKey: params.sessionKey,
+      agentId: params.agentId,
+      sessionId: params.sessionId,
+      stage: "model_first",
+    });
+    beginRunStage({
+      runId: params.runId,
+      sessionKey: params.sessionKey,
+      agentId: params.agentId,
+      sessionId: params.sessionId,
+      stage: "thinking",
+    });
     emitAgentEvent({
       runId: params.runId,
       stream: "thinking",

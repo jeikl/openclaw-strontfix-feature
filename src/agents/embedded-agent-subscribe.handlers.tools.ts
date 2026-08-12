@@ -84,6 +84,7 @@ import {
 } from "./embedded-agent-subscribe.tools.js";
 import { inferToolMetaFromArgs } from "./embedded-agent-utils.js";
 import { parseExecApprovalResultText } from "./exec-approval-result.js";
+import { beginRunStage, endRunStage } from "./run-stage-progress.js";
 import type { AgentEvent } from "./runtime/index.js";
 import {
   createToolValidationErrorSummary,
@@ -1022,6 +1023,40 @@ export function handleToolExecutionStart(
       toolCallId,
       source: "embedded-agent",
     });
+    try {
+      // End model streaming stages when tools start.
+      endRunStage({
+        runId: ctx.params.runId,
+        sessionKey: ctx.params.sessionKey,
+        agentId: ctx.params.agentId,
+        sessionId: ctx.params.sessionId,
+        stage: "model_first",
+      });
+      endRunStage({
+        runId: ctx.params.runId,
+        sessionKey: ctx.params.sessionKey,
+        agentId: ctx.params.agentId,
+        sessionId: ctx.params.sessionId,
+        stage: "thinking",
+      });
+      endRunStage({
+        runId: ctx.params.runId,
+        sessionKey: ctx.params.sessionKey,
+        agentId: ctx.params.agentId,
+        sessionId: ctx.params.sessionId,
+        stage: "reply",
+      });
+      beginRunStage({
+        runId: ctx.params.runId,
+        sessionKey: ctx.params.sessionKey,
+        agentId: ctx.params.agentId,
+        sessionId: ctx.params.sessionId,
+        stage: "tool",
+        detail: toolName,
+      });
+    } catch {
+      // diagnostics only
+    }
 
     // Track start time and args for after_tool_call hook.
     const startedAt = Date.now();
@@ -1550,6 +1585,23 @@ export async function handleToolExecutionEnd(
       }
     }
   }
+
+  endRunStage({
+    runId: ctx.params.runId,
+    sessionKey: ctx.params.sessionKey,
+    agentId: ctx.params.agentId,
+    sessionId: ctx.params.sessionId,
+    stage: "tool",
+    detail: toolName,
+  });
+  // Next model call after tools is another first-token wait.
+  beginRunStage({
+    runId: ctx.params.runId,
+    sessionKey: ctx.params.sessionKey,
+    agentId: ctx.params.agentId,
+    sessionId: ctx.params.sessionId,
+    stage: "model_first",
+  });
 
   emitAgentEvent({
     runId: ctx.params.runId,

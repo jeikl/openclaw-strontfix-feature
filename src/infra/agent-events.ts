@@ -19,6 +19,7 @@ export type AgentEventStream =
   | "patch"
   | "compaction"
   | "thinking"
+  | "run_stage"
   | (string & {});
 
 /** Lifecycle phase for a visible item in the agent activity feed. */

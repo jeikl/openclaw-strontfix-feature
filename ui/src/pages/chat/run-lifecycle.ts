@@ -321,6 +321,15 @@ export function reconcileChatRunLifecycle(host: RunLifecycleHost, options: Recon
     if ("chatThinkingStream" in host) {
       (host as { chatThinkingStream?: string | null }).chatThinkingStream = null;
     }
+    if ("chatRunStages" in host) {
+      // Keep completed stages for a moment so operators can read timings after the turn ends.
+      const stages = (host as { chatRunStages?: Array<{ active: boolean }> }).chatRunStages;
+      if (Array.isArray(stages)) {
+        (host as { chatRunStages?: Array<{ active: boolean }> }).chatRunStages = stages.map(
+          (s) => ({ ...s, active: false }),
+        );
+      }
+    }
     host.chatStreamStartedAt = null;
   }
   if (options.clearLocalRun) {

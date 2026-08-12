@@ -57,6 +57,8 @@ type ToolStreamHost = {
   chatStreamStartedAt: number | null;
   /** Live model reasoning/thinking stream (Control UI only; not channel delivery). */
   chatThinkingStream?: string | null;
+  /** High-latency run stages with wall-clock timing (Control UI only). */
+  chatRunStages?: ChatRunStageEntry[];
   chatStreamSegments: ChatStreamSegment[];
   toolStreamById: Map<string, ToolStreamEntry>;
   toolStreamOrder: string[];
@@ -317,6 +319,75 @@ export function resetToolStream(host: ToolStreamHost) {
   if ("chatThinkingStream" in host) {
     host.chatThinkingStream = null;
   }
+  if ("chatRunStages" in host) {
+    host.chatRunStages = [];
+  }
+}
+
+function upsertRunStage(host: ToolStreamHost, entry: ChatRunStageEntry): void {
+  const stages = Array.isArray(host.chatRunStages) ? [...host.chatRunStages] : [];
+  const index = stages.findIndex((s) => s.stage === entry.stage && s.active);
+  if (index >= 0 && entry.active) {
+    stages[index] = { ...stages[index], ...entry };
+  } else if (!entry.active) {
+    // Close the active row for this stage id, or append a completed row.
+    const activeIdx = stages.findIndex((s) => s.stage === entry.stage && s.active);
+    if (activeIdx >= 0) {
+      stages[activeIdx] = {
+        ...stages[activeIdx],
+        ...entry,
+        active: false,
+      };
+    } else {
+      stages.push({ ...entry, active: false });
+    }
+  } else {
+    stages.push(entry);
+  }
+  host.chatRunStages = stages;
+}
+
+function handleRunStageEvent(host: ToolStreamHost, payload: AgentEventPayload): void {
+  const data = payload.data ?? {};
+  const stage = typeof data.stage === "string" ? data.stage.trim() : "";
+  if (!stage) {
+    return;
+  }
+  const label = (typeof data.label === "string" && data.label.trim()) || stage;
+  const phase = typeof data.phase === "string" ? data.phase : "";
+  const startedAt =
+    typeof data.startedAt === "number" && Number.isFinite(data.startedAt)
+      ? data.startedAt
+      : typeof payload.ts === "number"
+        ? payload.ts
+        : Date.now();
+  if (phase === "start") {
+    upsertRunStage(host, {
+      stage,
+      label,
+      startedAt,
+      active: true,
+      durationMs: null,
+      endedAt: null,
+    });
+    return;
+  }
+  if (phase === "end") {
+    const endedAt =
+      typeof data.endedAt === "number" && Number.isFinite(data.endedAt) ? data.endedAt : Date.now();
+    const durationMs =
+      typeof data.durationMs === "number" && Number.isFinite(data.durationMs)
+        ? Math.max(0, data.durationMs)
+        : Math.max(0, endedAt - startedAt);
+    upsertRunStage(host, {
+      stage,
+      label,
+      startedAt,
+      endedAt,
+      durationMs,
+      active: false,
+    });
+  }
 }
 
 /** Merge cumulative text / delta thinking payloads into the live Control UI buffer. */
@@ -349,6 +420,17 @@ export type CompactionStatus = {
   runId: string | null;
   startedAt: number | null;
   completedAt: number | null;
+};
+
+/** One high-latency milestone for Control UI stage timing panel. */
+export type ChatRunStageEntry = {
+  stage: string;
+  label: string;
+  startedAt: number;
+  endedAt?: number | null;
+  durationMs?: number | null;
+  active: boolean;
+  detail?: string | null;
 };
 
 export type FallbackStatus = {
@@ -731,6 +813,11 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
         host.chatStreamStartedAt = Date.now();
       }
     }
+    return;
+  }
+
+  if (payload.stream === "run_stage") {
+    handleRunStageEvent(host, payload);
     return;
   }
 
