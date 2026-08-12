@@ -2,6 +2,12 @@
 
 Docs: https://docs.openclaw.ai
 
+## 2026.7.753
+
+### Fixes & Enhancements
+
+- **全局命令独立与完美共存 (Bin Scope Isolation for Coexistence):** 将包全局 `bin` 彻底隔离仅暴露 `jeikclaw` 命令，解决在已有原版 `openclaw` 环境下安装 `npm i -g jeikclaw` 产生的全局路径文件冲突（`EEXIST`）。现在原版 `openclaw` 与定制版 `jeikclaw` 可在同一台服务器上无缝完美共存。
+
 ## 2026.7.752
 
 ### Highlights
