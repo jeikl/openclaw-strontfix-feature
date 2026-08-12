@@ -2954,7 +2954,8 @@ async function processOpenAICompletionsStream(
     for (const delta of bufferedDeltas) {
       if (delta.kind === "text") {
         appendTextDeltaInternal(delta.text);
-      } else if (emitReasoning) {
+      } else {
+        // Always flush buffered wire reasoning; do not re-check emitReasoning.
         appendThinkingDeltaInternal(delta);
       }
     }
@@ -3053,9 +3054,7 @@ async function processOpenAICompletionsStream(
       appendFilteredVisibleTextDelta(delta.text);
       return;
     }
-    if (!emitReasoning) {
-      return;
-    }
+    // Wire-present thinking always surfaces (see processOpenAICompletionsStream).
     if (currentBlock?.type === "toolCall") {
       queuePostToolCallDelta(delta);
     } else {
@@ -3180,16 +3179,16 @@ async function processOpenAICompletionsStream(
       }
     }
     for (const reasoningDelta of reasoningDeltas) {
-      if (reasoningDelta.kind === "thinking" && !emitReasoning) {
-        continue;
-      }
+      // Always surface native wire reasoning when the provider actually sent it.
+      // emitReasoning only controls whether we *ask* for reasoning; dropping
+      // present reasoning_content hid thinking for NewAPI/DeepSeek/Qwen-compat.
       if (currentBlock?.type === "toolCall") {
         queuePostToolCallDelta({ ...reasoningDelta });
         continue;
       }
       if (reasoningDelta.kind === "text") {
         appendTextDelta(reasoningDelta.text);
-      } else if (emitReasoning) {
+      } else {
         appendThinkingDelta(reasoningDelta);
       }
     }
@@ -3710,6 +3709,13 @@ function resolveOpenAICompletionsReasoningEffort(options: OpenAICompletionsOptio
   return options?.reasoningEffort ?? options?.reasoning ?? "high";
 }
 
+/**
+ * Whether we should *request* / prefer reasoning on the outbound request.
+ * Inbound wire fields (reasoning_content / reasoning / reasoning_text) are always
+ * parsed when present — many OpenAI-compatible gateways (DeepSeek/Qwen/NewAPI)
+ * stream reasoning even when catalog `model.reasoning` is false or session
+ * thinking is "off".
+ */
 function shouldEmitOpenAICompletionsReasoning(
   model: OpenAIModeModel,
   options: OpenAICompletionsOptions | undefined,

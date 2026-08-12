@@ -33,10 +33,20 @@ import {
   getAssistantAttachmentAvailabilityRenderVersion,
   renderMessageGroup,
   renderStreamGroup,
+  renderThinkingPanel,
 } from "./chat-message.ts";
 import { renderRealtimeTalkConversation } from "./chat-realtime-controls.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
 import { renderWelcomeState, resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
+
+function renderThinkingPanelInline(text: string) {
+  return renderThinkingPanel({
+    text,
+    source: "reasoning_content",
+    streaming: true,
+    open: true,
+  });
+}
 
 const pinnedMessagesMap = new Map<string, PinnedMessages>();
 const deletedMessagesMap = new Map<string, DeletedMessages>();
@@ -649,10 +659,10 @@ export function renderChatThread(props: ChatThreadProps) {
   };
   const historyRenderLimit = resolveChatHistoryRenderWindow(props);
   const deleted = getDeletedMessages(props.sessionKey);
+  // Live wire thinking is always shown when present (diagnosis). Historical
+  // message thinking still respects the showThinking toggle.
   const hasLiveThinking =
-    showReasoning &&
-    typeof props.thinkingStream === "string" &&
-    props.thinkingStream.trim().length > 0;
+    typeof props.thinkingStream === "string" && props.thinkingStream.trim().length > 0;
   const chatItems = buildCachedChatItems({
     sessionKey: props.sessionKey,
     messages: props.messages,
@@ -845,15 +855,19 @@ export function renderChatThread(props: ChatThreadProps) {
                       ${liveCard
                         ? renderRunStageCard(liveCard, { live: true, nowMs: Date.now() })
                         : nothing}
+                      ${hasLiveThinking
+                        ? html`<div class="chat-run-stage-card chat-run-stage-card--thinking">
+                            ${renderThinkingPanelInline(props.thinkingStream!)}
+                          </div>`
+                        : nothing}
                       ${renderStreamGroup(item.parts, {
                         onOpenSidebar: props.onOpenSidebar,
                         assistant: assistantIdentity,
                         basePath: props.basePath,
                         authToken: props.assistantAttachmentAuthToken ?? null,
-                        thinkingStream:
-                          showReasoning && props.thinkingStream?.trim()
-                            ? props.thinkingStream
-                            : null,
+                        // Stream group also renders thinking when showReasoning;
+                        // live block above already shows wire thinking for diagnosis.
+                        thinkingStream: null,
                         showReasoning,
                       })}
                     `;
@@ -908,7 +922,14 @@ export function renderChatThread(props: ChatThreadProps) {
               )}
               ${trailingCards.map((card) => renderRunStageCard(card, { live: false }))}
               ${!coalesced.some((it) => it.kind === "stream-run") && liveCard
-                ? renderRunStageCard(liveCard, { live: true, nowMs: Date.now() })
+                ? html`
+                    ${renderRunStageCard(liveCard, { live: true, nowMs: Date.now() })}
+                    ${hasLiveThinking
+                      ? html`<div class="chat-run-stage-card chat-run-stage-card--thinking">
+                          ${renderThinkingPanelInline(props.thinkingStream!)}
+                        </div>`
+                      : nothing}
+                  `
                 : nothing}
             `;
           },

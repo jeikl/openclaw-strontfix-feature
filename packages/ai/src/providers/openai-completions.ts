@@ -437,7 +437,9 @@ export const streamOpenAICompletions: StreamFunction<
           // (e.g., chutes.ai returns both reasoning_content and reasoning with same content)
           const reasoningFields = ["reasoning_content", "reasoning", "reasoning_text"];
           const deltaFields = choiceDelta as Record<string, unknown>;
-          const shouldEmitReasoning = Boolean(model.reasoning && options?.reasoningEffort);
+          // Always parse wire reasoning when present. Catalog `model.reasoning`
+          // / reasoningEffort only control outbound request knobs; many
+          // OpenAI-compatible gateways still stream reasoning_content regardless.
           let foundReasoningField: string | null = null;
           for (const field of reasoningFields) {
             const value = deltaFields[field];
@@ -449,7 +451,7 @@ export const streamOpenAICompletions: StreamFunction<
           if (foundReasoningField) {
             reasoningTagTextPartitioner.markStrict();
           }
-          if (shouldEmitReasoning && foundReasoningField) {
+          if (foundReasoningField) {
             const delta = deltaFields[foundReasoningField];
             if (typeof delta === "string" && delta.length > 0) {
               const thinkingSignature =
