@@ -63,6 +63,8 @@ export type ChatProps = {
   toolMessages: unknown[];
   streamSegments: ChatStreamSegment[];
   stream: string | null;
+  /** Live reasoning/thinking buffer for Control UI (not channel delivery). */
+  thinkingStream?: string | null;
   streamStartedAt: number | null;
   assistantAvatarUrl?: string | null;
   draft: string;
@@ -165,6 +167,7 @@ export function renderChat(props: ChatProps) {
     toolMessages: props.toolMessages,
     streamSegments: props.streamSegments,
     stream: props.stream,
+    thinkingStream: props.thinkingStream ?? null,
     streamStartedAt: props.streamStartedAt,
     queue: props.queue,
     showThinking: props.showThinking,
@@ -214,6 +217,7 @@ export function renderChat(props: ChatProps) {
     fallbackStatus: props.fallbackStatus,
     messages: props.messages,
     stream: props.stream,
+    thinkingStream: props.thinkingStream ?? null,
     sideResult: props.sideResult,
     queue: props.queue,
     draft: props.draft,

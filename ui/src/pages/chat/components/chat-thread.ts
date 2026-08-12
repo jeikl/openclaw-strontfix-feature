@@ -74,6 +74,7 @@ type ChatThreadProps = {
   toolMessages: unknown[];
   streamSegments: ChatStreamSegment[];
   stream: string | null;
+  thinkingStream?: string | null;
   streamStartedAt: number | null;
   queue: ChatQueueItem[];
   showThinking: boolean;
@@ -636,14 +637,19 @@ export function renderChatThread(props: ChatThreadProps) {
   const requestUpdate = props.onRequestUpdate ?? (() => {});
   const displayStream = props.stream ?? null;
   const activeSession = props.sessions?.sessions?.find((row) => row.key === props.sessionKey);
-  const reasoningLevel = activeSession?.reasoningLevel ?? "off";
-  const showReasoning = props.showThinking && reasoningLevel !== "off";
+  // Control UI: Show-thinking toggle alone controls display. Session reasoningLevel
+  // is a model-effort setting and must not hide live/diagnostic reasoning panels.
+  const showReasoning = props.showThinking;
   const assistantIdentity = {
     name: props.assistantName,
     avatar: resolveAssistantDisplayAvatar(props),
   };
   const historyRenderLimit = resolveChatHistoryRenderWindow(props);
   const deleted = getDeletedMessages(props.sessionKey);
+  const hasLiveThinking =
+    showReasoning &&
+    typeof props.thinkingStream === "string" &&
+    props.thinkingStream.trim().length > 0;
   const chatItems = buildCachedChatItems({
     sessionKey: props.sessionKey,
     messages: props.messages,
@@ -656,6 +662,8 @@ export function renderChatThread(props: ChatThreadProps) {
     searchOpen: state.searchOpen,
     searchQuery: state.searchQuery,
     historyRenderLimit,
+    // Keep a stream-run mount while only thinking tokens are arriving.
+    showLivePlaceholder: hasLiveThinking,
   });
   syncToolCardExpansionState(props.sessionKey, chatItems, Boolean(props.autoExpandToolCalls));
   const expandedToolCards = getExpandedToolCards(props.sessionKey);
@@ -712,6 +720,7 @@ export function renderChatThread(props: ChatThreadProps) {
             props.sessionKey,
             props.fullMessageAgentId,
             showReasoning,
+            props.thinkingStream ?? "",
             props.showToolCalls,
             Boolean(props.autoExpandToolCalls),
             props.assistantName,
@@ -771,6 +780,9 @@ export function renderChatThread(props: ChatThreadProps) {
                     assistant: assistantIdentity,
                     basePath: props.basePath,
                     authToken: props.assistantAttachmentAuthToken ?? null,
+                    thinkingStream:
+                      showReasoning && props.thinkingStream?.trim() ? props.thinkingStream : null,
+                    showReasoning,
                   });
                 }
                 if (item.kind === "group") {

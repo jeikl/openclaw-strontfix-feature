@@ -48,6 +48,8 @@ export type BuildChatItemsProps = {
   searchOpen?: boolean;
   searchQuery?: string;
   historyRenderLimit?: number;
+  /** When true and stream is still null, keep a reading indicator so live thinking can mount. */
+  showLivePlaceholder?: boolean;
 };
 
 type CachedChatItems = {
@@ -1067,9 +1069,12 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
 
   const hasPendingResponse =
     props.stream === null &&
-    queuedSends.some(
-      (item) => item.sendState === "sending" && shouldRenderQueuedSendInThread(item),
-    );
+    (Boolean(props.showLivePlaceholder) ||
+      queuedSends.some(
+        (item) =>
+          (item.sendState === "sending" || item.sendState === "waiting-model") &&
+          shouldRenderQueuedSendInThread(item),
+      ));
   if (hasPendingResponse) {
     items.push({
       kind: "reading-indicator",
@@ -1116,7 +1121,8 @@ function sameChatItemsInput(previous: BuildChatItemsProps, next: BuildChatItemsP
     previous.showToolCalls === next.showToolCalls &&
     previous.searchOpen === next.searchOpen &&
     previous.searchQuery === next.searchQuery &&
-    previous.historyRenderLimit === next.historyRenderLimit
+    previous.historyRenderLimit === next.historyRenderLimit &&
+    previous.showLivePlaceholder === next.showLivePlaceholder
   );
 }
 

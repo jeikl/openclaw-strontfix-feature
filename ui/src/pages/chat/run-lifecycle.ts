@@ -318,6 +318,9 @@ export function reconcileChatRunLifecycle(host: RunLifecycleHost, options: Recon
   }
   if (options.clearChatStream) {
     host.chatStream = null;
+    if ("chatThinkingStream" in host) {
+      (host as { chatThinkingStream?: string | null }).chatThinkingStream = null;
+    }
     host.chatStreamStartedAt = null;
   }
   if (options.clearLocalRun) {

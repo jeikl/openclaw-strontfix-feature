@@ -78,6 +78,7 @@ type ChatComposerProps = {
   fallbackStatus?: FallbackStatus | null;
   messages: unknown[];
   stream: string | null;
+  thinkingStream?: string | null;
   sideResult?: ChatSideResult | null;
   queue: ChatQueueItem[];
   draft: string;
@@ -1928,14 +1929,27 @@ export function renderChatComposer(props: ChatComposerProps) {
   );
   const composerControls = props.composerControls ?? nothing;
   const assistantName = props.assistantName || "OpenClaw";
+  // Pipeline stage labels for Control UI diagnosis:
+  // 正在准备 prompt → 发送成功 → 思考中 → 回复中
+  const hasThinking =
+    typeof props.thinkingStream === "string" && props.thinkingStream.trim().length > 0;
+  const hasAssistantStream = typeof props.stream === "string" && props.stream.trim().length > 0;
   const inProgressLabel =
     submittedProgress?.sendState === "waiting-model"
-      ? "Preparing model..."
-      : props.stream !== null
-        ? `${assistantName} is responding...`
-        : props.sending || submittedProgress
-          ? "Sending message..."
-          : `${assistantName} is working...`;
+      ? hasThinking
+        ? "思考中 (thinking)…"
+        : hasAssistantStream
+          ? "回复中…"
+          : "正在准备 prompt / 等待模型首包…"
+      : hasThinking && !hasAssistantStream
+        ? "思考中 (thinking)…"
+        : props.stream !== null
+          ? hasThinking
+            ? "回复中（思考已输出）…"
+            : `${assistantName} 回复中…`
+          : props.sending || submittedProgress
+            ? "发送成功 · 正在准备 prompt…"
+            : `${assistantName} 处理中…`;
   const mobileRunStatusIndicator = renderChatRunStatusIndicator(composerRunStatus, inProgressLabel);
   const requestUpdate = props.onRequestUpdate ?? (() => {});
   const sendShortcut = normalizeChatSendShortcut(props.sendShortcut);

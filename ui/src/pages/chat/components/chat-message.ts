@@ -560,6 +560,8 @@ type StreamGroupOptions = {
   assistant?: AssistantIdentity;
   basePath?: string;
   authToken?: string | null;
+  thinkingStream?: string | null;
+  showReasoning?: boolean;
 };
 
 function renderReadingIndicatorBubble() {
@@ -570,24 +572,75 @@ function renderReadingIndicatorBubble() {
   `;
 }
 
+/** NewAPI-style collapsible reasoning panel (Control UI diagnosis only). */
+export function renderThinkingPanel(params: {
+  text: string;
+  source?: string;
+  streaming?: boolean;
+  open?: boolean;
+}) {
+  const text = params.text.trim();
+  if (!text) {
+    return nothing;
+  }
+  const source = params.source?.trim() || "reasoning";
+  const open = params.open !== false;
+  return html`
+    <details class="chat-thinking-panel" ?open=${open}>
+      <summary class="chat-thinking-panel__summary">
+        <span class="chat-thinking-panel__title">
+          <span class="chat-thinking-panel__icon" aria-hidden="true">◎</span>
+          思考过程
+          ${params.streaming
+            ? html`<span class="chat-thinking-panel__live" aria-label="streaming">…</span>`
+            : nothing}
+        </span>
+        <span class="chat-thinking-panel__source">来源: ${source}</span>
+      </summary>
+      <div class="chat-thinking-panel__body">
+        <pre class="chat-thinking-panel__text">${text}</pre>
+      </div>
+    </details>
+  `;
+}
+
 // One assistant group per contiguous run of streaming items: a reply that
 // arrives as several stream segments renders under a single avatar/footer
 // instead of flashing a separate avatar+bubble per segment (#63956).
 export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOptions = {}) {
-  const { onOpenSidebar, assistant, basePath, authToken } = opts;
+  const { onOpenSidebar, assistant, basePath, authToken, thinkingStream, showReasoning } = opts;
   const name = assistant?.name ?? "Assistant";
   // Footer (sender + time) anchors to the earliest streamed segment; a run that
   // is only the reading indicator has no timestamp and therefore no footer.
   const streamStarts = parts.flatMap((part) => (part.kind === "stream" ? [part.startedAt] : []));
   const footerStartedAt = streamStarts.length > 0 ? Math.min(...streamStarts) : null;
+  const liveThinking =
+    showReasoning && typeof thinkingStream === "string" && thinkingStream.trim()
+      ? thinkingStream
+      : null;
+  const hasStreamText = parts.some((part) => part.kind === "stream" && part.text.trim());
+  const showThinkingOnly =
+    Boolean(liveThinking) && !hasStreamText && parts.every((p) => p.kind === "reading-indicator");
 
   return html`
     <div class="chat-group assistant">
       ${renderChatAvatar("assistant", assistant, undefined, basePath, authToken)}
       <div class="chat-group-messages">
+        ${liveThinking
+          ? html`<div class="chat-bubble chat-bubble--thinking">
+              ${renderThinkingPanel({
+                text: liveThinking,
+                source: "reasoningContent",
+                streaming: true,
+                open: true,
+              })}
+            </div>`
+          : nothing}
         ${parts.map((part) =>
           part.kind === "reading-indicator"
-            ? renderReadingIndicatorBubble()
+            ? showThinkingOnly
+              ? nothing
+              : renderReadingIndicatorBubble()
             : renderGroupedMessage(
                 {
                   role: "assistant",
@@ -599,11 +652,11 @@ export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOpt
                 onOpenSidebar,
               ),
         )}
-        ${footerStartedAt !== null
+        ${footerStartedAt !== null || liveThinking
           ? html`
               <div class="chat-group-footer">
                 <span class="chat-sender-name">${name}</span>
-                ${renderChatTimestamp(footerStartedAt)}
+                ${footerStartedAt !== null ? renderChatTimestamp(footerStartedAt) : nothing}
               </div>
             `
           : nothing}
@@ -2028,7 +2081,16 @@ function renderGroupedMessage(
   const extractedThinking =
     opts.showReasoning && role === "assistant" ? extractThinkingCached(message) : null;
   const markdownBase = extractedText?.trim() ? extractedText : null;
-  const reasoningMarkdown = extractedThinking ? formatReasoningMarkdown(extractedThinking) : null;
+  const thinkingPanel = extractedThinking
+    ? renderThinkingPanel({
+        text: extractedThinking,
+        source: "reasoningContent",
+        streaming: Boolean(opts.isStreaming),
+        open: true,
+      })
+    : null;
+  // Keep legacy markdown helper for tests that still assert italic reasoning text.
+  void formatReasoningMarkdown;
   const markdown = markdownBase;
   const markdownRenderOptions: MarkdownRenderOptions = {
     codeBlockChrome: role === "user" ? "none" : "copy",
@@ -2056,7 +2118,8 @@ function renderGroupedMessage(
     !hasPairingQrExpiryNotices &&
     visibleAttachments.length === 0 &&
     assistantViewBlocks.length === 0 &&
-    !normalizedMessage.replyTarget
+    !normalizedMessage.replyTarget &&
+    !thinkingPanel
   ) {
     return nothing;
   }
@@ -2167,12 +2230,7 @@ function renderGroupedMessage(
                         opts.onRequestUpdate,
                         opts.onAssistantAttachmentLoaded,
                       )}
-                      ${assistantViewContent}
-                      ${reasoningMarkdown
-                        ? html`<div class="chat-thinking">
-                            ${unsafeHTML(toSanitizedMarkdownHtml(reasoningMarkdown))}
-                          </div>`
-                        : nothing}
+                      ${assistantViewContent} ${thinkingPanel ?? nothing}
                       ${jsonResult
                         ? html`<details
                             class="chat-json-collapse"
@@ -2228,12 +2286,7 @@ function renderGroupedMessage(
               opts.onRequestUpdate,
               opts.onAssistantAttachmentLoaded,
             )}
-            ${reasoningMarkdown
-              ? html`<div class="chat-thinking">
-                  ${unsafeHTML(toSanitizedMarkdownHtml(reasoningMarkdown))}
-                </div>`
-              : nothing}
-            ${assistantViewContent}
+            ${thinkingPanel ?? nothing} ${assistantViewContent}
             ${jsonResult
               ? html`<details class="chat-json-collapse">
                   <summary class="chat-json-summary">

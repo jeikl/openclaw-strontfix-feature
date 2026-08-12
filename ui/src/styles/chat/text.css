@@ -18,6 +18,96 @@
   background: rgba(16, 24, 40, 0.04);
 }
 
+/* NewAPI-style reasoning panel (Control UI only) */
+.chat-thinking-panel {
+  margin: 0 0 10px;
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid rgba(124, 58, 237, 0.35);
+  background: linear-gradient(180deg, rgba(109, 40, 217, 0.18), rgba(76, 29, 149, 0.08));
+  color: var(--chat-text);
+  font-size: var(--control-ui-text-sm);
+}
+
+.chat-thinking-panel__summary {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  cursor: pointer;
+  user-select: none;
+  background: linear-gradient(90deg, #6d28d9, #7c3aed);
+  color: #fff;
+}
+
+.chat-thinking-panel__summary::-webkit-details-marker {
+  display: none;
+}
+
+.chat-thinking-panel__title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.chat-thinking-panel__icon {
+  opacity: 0.95;
+}
+
+.chat-thinking-panel__live {
+  display: inline-block;
+  min-width: 1.2em;
+  animation: chat-thinking-pulse 1.2s ease-in-out infinite;
+}
+
+.chat-thinking-panel__source {
+  font-size: 12px;
+  opacity: 0.9;
+  white-space: nowrap;
+}
+
+.chat-thinking-panel__body {
+  padding: 12px 14px 14px;
+  max-height: 280px;
+  overflow: auto;
+  background: rgba(17, 12, 28, 0.55);
+}
+
+:root[data-theme-mode="light"] .chat-thinking-panel__body {
+  background: rgba(255, 255, 255, 0.78);
+}
+
+.chat-thinking-panel__text {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--muted);
+}
+
+.chat-bubble--thinking {
+  background: transparent;
+  border: none;
+  padding: 0;
+  box-shadow: none;
+}
+
+@keyframes chat-thinking-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
 .chat-text {
   font-size: var(--chat-text-size);
   line-height: 1.5;

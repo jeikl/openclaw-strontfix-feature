@@ -161,6 +161,7 @@ export type ChatPageHost = ChatHost &
     chatSubmitGuards: Map<string, Promise<void>>;
     chatSendTimingsByRun: Map<string, ChatSendTimingEntry>;
     chatStreamSegments: Array<{ text: string; ts: number }>;
+    chatThinkingStream: string | null;
     toolStreamById: Map<string, ToolStreamEntry>;
     toolStreamOrder: string[];
     toolStreamSyncTimer: number | null;
@@ -340,6 +341,7 @@ export function resetChatStateForRouteSession(state: ChatPageHost, sessionKey: s
   state.chatThinkingLevel = null;
   state.chatVerboseLevel = null;
   state.chatStream = null;
+  state.chatThinkingStream = null;
   state.chatSideResult = null;
   state.lastError = null;
   state.chatError = null;
@@ -993,6 +995,7 @@ export function createPageState(
     chatAttachments: [] as ChatAttachment[],
     chatRunId: null,
     chatStream: null,
+    chatThinkingStream: null,
     chatStreamStartedAt: null,
     lastError: null,
     chatError: null,

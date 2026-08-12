@@ -55,6 +55,8 @@ type ToolStreamHost = {
   chatRunId: string | null;
   chatStream: string | null;
   chatStreamStartedAt: number | null;
+  /** Live model reasoning/thinking stream (Control UI only; not channel delivery). */
+  chatThinkingStream?: string | null;
   chatStreamSegments: ChatStreamSegment[];
   toolStreamById: Map<string, ToolStreamEntry>;
   toolStreamOrder: string[];
@@ -312,6 +314,34 @@ export function resetToolStream(host: ToolStreamHost) {
   host.toolStreamOrder = [];
   host.chatToolMessages = [];
   host.chatStreamSegments = [];
+  if ("chatThinkingStream" in host) {
+    host.chatThinkingStream = null;
+  }
+}
+
+/** Merge cumulative text / delta thinking payloads into the live Control UI buffer. */
+export function resolveThinkingStreamText(
+  previous: string | null | undefined,
+  data: Record<string, unknown> | undefined,
+): string | null {
+  if (!data || typeof data !== "object") {
+    return previous ?? null;
+  }
+  const nextText = typeof data.text === "string" ? data.text : "";
+  const nextDelta = typeof data.delta === "string" ? data.delta : "";
+  const prev = typeof previous === "string" ? previous : "";
+  if (nextText) {
+    if (!prev || nextText.startsWith(prev) || nextText.length >= prev.length) {
+      return nextText;
+    }
+  }
+  if (nextDelta) {
+    return `${prev}${nextDelta}`;
+  }
+  if (nextText) {
+    return nextText;
+  }
+  return prev || null;
 }
 
 export type CompactionStatus = {
@@ -689,6 +719,18 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
   }
 
   if (handlePreambleProgressEvent(host, payload)) {
+    return;
+  }
+
+  // Live reasoning/thinking tokens (WebUI diagnosis only).
+  if (payload.stream === "thinking") {
+    const next = resolveThinkingStreamText(host.chatThinkingStream, payload.data ?? {});
+    if (typeof next === "string" && next.length > 0) {
+      host.chatThinkingStream = next;
+      if (!host.chatStreamStartedAt) {
+        host.chatStreamStartedAt = Date.now();
+      }
+    }
     return;
   }
 
