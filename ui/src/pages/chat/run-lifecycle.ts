@@ -13,7 +13,13 @@ import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import { formatConnectError } from "./connect-error.ts";
 import { resetChatInputHistoryNavigation, type ChatInputHistoryState } from "./input-history.ts";
 // Control UI chat module implements run lifecycle behavior.
-import { resetToolStream, type CompactionStatus, type FallbackStatus } from "./tool-stream.ts";
+import { createRunStageCardId, saveRunStageCard, type ChatRunStageCard } from "./run-stage-ui.ts";
+import {
+  resetToolStream,
+  type ChatRunStageEntry,
+  type CompactionStatus,
+  type FallbackStatus,
+} from "./tool-stream.ts";
 
 export const CHAT_RUN_STATUS_TOAST_DURATION_MS = 5_000;
 
@@ -321,14 +327,46 @@ export function reconcileChatRunLifecycle(host: RunLifecycleHost, options: Recon
     if ("chatThinkingStream" in host) {
       (host as { chatThinkingStream?: string | null }).chatThinkingStream = null;
     }
-    if ("chatRunStages" in host) {
-      // Keep completed stages for a moment so operators can read timings after the turn ends.
-      const stages = (host as { chatRunStages?: Array<{ active: boolean }> }).chatRunStages;
-      if (Array.isArray(stages)) {
-        (host as { chatRunStages?: Array<{ active: boolean }> }).chatRunStages = stages.map(
-          (s) => ({ ...s, active: false }),
+    // Finalize live stages into a session-local UI card (never model context).
+    try {
+      const hostAny = host as {
+        sessionKey?: string;
+        chatRunId?: string | null;
+        chatRunStages?: ChatRunStageEntry[];
+        chatRunStageCards?: ChatRunStageCard[];
+        chatRunStageCardId?: string | null;
+      };
+      const stages = Array.isArray(hostAny.chatRunStages) ? hostAny.chatRunStages : [];
+      if (stages.length > 0 && hostAny.sessionKey) {
+        const endedAt = Date.now();
+        const finalized: ChatRunStageEntry[] = stages.map((s) => ({
+          ...s,
+          active: false,
+          endedAt: s.endedAt ?? endedAt,
+          durationMs: s.durationMs ?? Math.max(0, (s.endedAt ?? endedAt) - s.startedAt),
+        }));
+        const cardId =
+          hostAny.chatRunStageCardId ?? createRunStageCardId(hostAny.chatRunId ?? null);
+        const startedAt = finalized.reduce(
+          (min, s) => Math.min(min, s.startedAt),
+          finalized[0]?.startedAt ?? endedAt,
         );
+        const card: ChatRunStageCard = {
+          id: cardId,
+          sessionKey: hostAny.sessionKey,
+          runId: hostAny.chatRunId ?? null,
+          startedAt,
+          endedAt,
+          stages: finalized,
+        };
+        saveRunStageCard(card);
+        const prev = Array.isArray(hostAny.chatRunStageCards) ? hostAny.chatRunStageCards : [];
+        hostAny.chatRunStageCards = [...prev.filter((c) => c.id !== card.id), card];
+        hostAny.chatRunStages = finalized;
+        hostAny.chatRunStageCardId = null;
       }
+    } catch {
+      // UI diagnostics only
     }
     host.chatStreamStartedAt = null;
   }

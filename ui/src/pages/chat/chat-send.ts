@@ -84,6 +84,7 @@ import {
   isChatStopCommand,
   reconcileChatRunLifecycle,
 } from "./run-lifecycle.ts";
+import { createRunStageCardId } from "./run-stage-ui.ts";
 import { scheduleChatScroll, resetChatScroll } from "./scroll.ts";
 import { resetToolStream } from "./tool-stream.ts";
 import { buildUserChatMessageContentBlocks } from "./user-message-content.ts";
@@ -609,8 +610,13 @@ async function sendQueuedChatMessage(
   registerChatSendTiming(host, sendingItem, runId, requestStartedAtMs);
   recordChatSendTiming(host, sendingItem, "request-start", sendingItem.sendSubmittedAtMs);
   host.chatSending = true;
+  // New turn: clear only the live stage buffer; keep persisted session cards for UI.
   if ("chatRunStages" in host) {
     (host as { chatRunStages?: unknown[] }).chatRunStages = [];
+  }
+  if ("chatRunStageCardId" in host) {
+    (host as { chatRunStageCardId?: string | null }).chatRunStageCardId =
+      createRunStageCardId(runId);
   }
   if ("chatThinkingStream" in host) {
     (host as { chatThinkingStream?: string | null }).chatThinkingStream = null;

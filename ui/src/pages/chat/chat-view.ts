@@ -42,6 +42,7 @@ import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "./inpu
 import type { RealtimeTalkConversationEntry } from "./realtime-talk-conversation.ts";
 import type { RealtimeTalkStatus } from "./realtime-talk.ts";
 import type { ChatRunUiStatus } from "./run-lifecycle.ts";
+import type { ChatRunStageCard } from "./run-stage-ui.ts";
 import type { ChatRunStageEntry, CompactionStatus, FallbackStatus } from "./tool-stream.ts";
 import "../../components/resizable-divider.ts";
 
@@ -65,8 +66,10 @@ export type ChatProps = {
   stream: string | null;
   /** Live reasoning/thinking buffer for Control UI (not channel delivery). */
   thinkingStream?: string | null;
-  /** High-latency pipeline stages with durations (Control UI only). */
+  /** Live high-latency pipeline stages (Control UI only). */
   runStages?: ChatRunStageEntry[] | null;
+  /** Persisted per-session stage cards (Control UI only; not model context). */
+  runStageCards?: ChatRunStageCard[] | null;
   streamStartedAt: number | null;
   assistantAvatarUrl?: string | null;
   draft: string;
@@ -170,6 +173,8 @@ export function renderChat(props: ChatProps) {
     streamSegments: props.streamSegments,
     stream: props.stream,
     thinkingStream: props.thinkingStream ?? null,
+    runStages: props.runStages ?? null,
+    runStageCards: props.runStageCards ?? null,
     streamStartedAt: props.streamStartedAt,
     queue: props.queue,
     showThinking: props.showThinking,
@@ -220,7 +225,6 @@ export function renderChat(props: ChatProps) {
     messages: props.messages,
     stream: props.stream,
     thinkingStream: props.thinkingStream ?? null,
-    runStages: props.runStages ?? null,
     sideResult: props.sideResult,
     queue: props.queue,
     draft: props.draft,

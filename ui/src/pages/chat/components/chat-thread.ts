@@ -27,6 +27,7 @@ import {
 import { DeletedMessages } from "../deleted-messages.ts";
 import { PinnedMessages } from "../pinned-messages.ts";
 import type { RealtimeTalkConversationEntry } from "../realtime-talk-conversation.ts";
+import { renderRunStageCard } from "../run-stage-ui.ts";
 import { getOrCreateSessionCacheValue } from "../session-cache.ts";
 import {
   getAssistantAttachmentAvailabilityRenderVersion,
@@ -75,6 +76,8 @@ type ChatThreadProps = {
   streamSegments: ChatStreamSegment[];
   stream: string | null;
   thinkingStream?: string | null;
+  runStages?: import("../tool-stream.ts").ChatRunStageEntry[] | null;
+  runStageCards?: import("../run-stage-ui.ts").ChatRunStageCard[] | null;
   streamStartedAt: number | null;
   queue: ChatQueueItem[];
   showThinking: boolean;
@@ -721,6 +724,8 @@ export function renderChatThread(props: ChatThreadProps) {
             props.fullMessageAgentId,
             showReasoning,
             props.thinkingStream ?? "",
+            JSON.stringify(props.runStages ?? null),
+            JSON.stringify(props.runStageCards ?? null),
             props.showToolCalls,
             Boolean(props.autoExpandToolCalls),
             props.assistantName,
@@ -735,100 +740,178 @@ export function renderChatThread(props: ChatThreadProps) {
             props.allowExternalEmbedUrls ?? false,
             threadContextWindow,
           ],
-          () =>
-            repeat(
-              coalesceStreamRuns(chatItems),
-              (item) => item.key,
-              (item) => {
-                if (item.kind === "divider") {
-                  return html`
-                    <div class="chat-divider" data-ts=${String(item.timestamp)}>
-                      <div class="chat-divider__rule" role="separator" aria-label=${item.label}>
-                        <span class="chat-divider__line"></span>
-                        <span class="chat-divider__label">${item.label}</span>
-                        <span class="chat-divider__line"></span>
-                      </div>
-                      ${item.description || item.action
-                        ? html`
-                            <div class="chat-divider__details">
-                              ${item.description
-                                ? html`<span class="chat-divider__description">
-                                    ${item.description}
-                                  </span>`
-                                : nothing}
-                              ${item.action?.kind === "session-checkpoints" &&
-                              props.onOpenSessionCheckpoints
-                                ? html`
-                                    <button
-                                      type="button"
-                                      class="btn btn--subtle btn--sm chat-divider__action"
-                                      @click=${() => props.onOpenSessionCheckpoints?.()}
-                                    >
-                                      ${item.action.label}
-                                    </button>
-                                  `
-                                : nothing}
-                            </div>
-                          `
-                        : nothing}
-                    </div>
-                  `;
+          () => {
+            const coalesced = coalesceStreamRuns(chatItems);
+            const liveActive = (props.runStages ?? []).some((s) => s.active);
+            const liveStages = props.runStages ?? [];
+            // Completed cards for this session (UI-only localStorage). Exclude pure-live
+            // duplicate while a turn is still running.
+            const historyCards = (props.runStageCards ?? []).filter((card) => {
+              if (!card.stages.length) {
+                return false;
+              }
+              if (liveActive && card.endedAt == null) {
+                return false;
+              }
+              return true;
+            });
+            // Assign each completed card to the first assistant group/stream-run at/after
+            // its start time (display only — never model context).
+            const usedCardIds = new Set<string>();
+            const cardsBeforeKey = new Map<string, typeof historyCards>();
+            for (const card of historyCards) {
+              const target = coalesced.find((it) => {
+                if (it.kind === "stream-run") {
+                  return true;
                 }
-                if (item.kind === "stream-run") {
-                  return renderStreamGroup(item.parts, {
-                    onOpenSidebar: props.onOpenSidebar,
-                    assistant: assistantIdentity,
-                    basePath: props.basePath,
-                    authToken: props.assistantAttachmentAuthToken ?? null,
-                    thinkingStream:
-                      showReasoning && props.thinkingStream?.trim() ? props.thinkingStream : null,
-                    showReasoning,
-                  });
+                if (it.kind !== "group") {
+                  return false;
                 }
-                if (item.kind === "group") {
-                  if (deleted.has(item.key)) {
-                    return nothing;
-                  }
-                  return renderMessageGroup(item, {
-                    onOpenSidebar: props.onOpenSidebar,
+                if (it.role !== "assistant") {
+                  return false;
+                }
+                const ts = it.timestamp ?? 0;
+                return ts >= card.startedAt - 2_000;
+              });
+              const key = target?.key ?? `__trailing__`;
+              if (usedCardIds.has(card.id)) {
+                continue;
+              }
+              usedCardIds.add(card.id);
+              const list = cardsBeforeKey.get(key) ?? [];
+              list.push(card);
+              cardsBeforeKey.set(key, list);
+            }
+            const trailingCards = cardsBeforeKey.get("__trailing__") ?? [];
+            const liveCard =
+              liveStages.length > 0
+                ? {
+                    id: "live",
                     sessionKey: props.sessionKey,
-                    agentId: props.fullMessageAgentId,
-                    showReasoning,
-                    showToolCalls: props.showToolCalls,
-                    autoExpandToolCalls: Boolean(props.autoExpandToolCalls),
-                    isToolMessageExpanded: (messageId: string) => expandedToolCards.get(messageId),
-                    onToggleToolMessageExpanded: (messageId: string, expanded?: boolean) => {
-                      expandedToolCards.set(
-                        messageId,
-                        !(expanded ?? expandedToolCards.get(messageId) ?? false),
-                      );
-                      requestUpdate();
-                    },
-                    isToolExpanded: (toolCardId: string) =>
-                      expandedToolCards.get(toolCardId) ?? false,
-                    onToggleToolExpanded: toggleToolCardExpanded,
-                    onRequestUpdate: requestUpdate,
-                    onAssistantAttachmentLoaded: props.onAssistantAttachmentLoaded,
-                    assistantName: props.assistantName,
-                    assistantAvatar: assistantIdentity.avatar,
-                    userName: props.userName ?? null,
-                    userAvatar: props.userAvatar ?? null,
-                    basePath: props.basePath,
-                    localMediaPreviewRoots: props.localMediaPreviewRoots ?? [],
-                    assistantAttachmentAuthToken: props.assistantAttachmentAuthToken ?? null,
-                    canvasPluginSurfaceUrl: props.canvasPluginSurfaceUrl,
-                    embedSandboxMode: props.embedSandboxMode ?? "scripts",
-                    allowExternalEmbedUrls: props.allowExternalEmbedUrls ?? false,
-                    contextWindow: threadContextWindow,
-                    onDelete: () => {
-                      deleted.delete(item.key);
-                      requestUpdate();
-                    },
-                  });
-                }
-                return nothing;
-              },
-            ),
+                    runId: null as string | null,
+                    startedAt: liveStages[0]?.startedAt ?? Date.now(),
+                    endedAt: null as number | null,
+                    stages: liveStages,
+                  }
+                : null;
+
+            return html`
+              ${repeat(
+                coalesced,
+                (item) => item.key,
+                (item) => {
+                  const cardsAbove = cardsBeforeKey.get(item.key) ?? [];
+                  const stagePrefix = html`${cardsAbove.map((card) =>
+                    renderRunStageCard(card, { live: false }),
+                  )}`;
+                  if (item.kind === "divider") {
+                    return html`
+                      ${stagePrefix}
+                      <div class="chat-divider" data-ts=${String(item.timestamp)}>
+                        <div class="chat-divider__rule" role="separator" aria-label=${item.label}>
+                          <span class="chat-divider__line"></span>
+                          <span class="chat-divider__label">${item.label}</span>
+                          <span class="chat-divider__line"></span>
+                        </div>
+                        ${item.description || item.action
+                          ? html`
+                              <div class="chat-divider__details">
+                                ${item.description
+                                  ? html`<span class="chat-divider__description">
+                                      ${item.description}
+                                    </span>`
+                                  : nothing}
+                                ${item.action?.kind === "session-checkpoints" &&
+                                props.onOpenSessionCheckpoints
+                                  ? html`
+                                      <button
+                                        type="button"
+                                        class="btn btn--subtle btn--sm chat-divider__action"
+                                        @click=${() => props.onOpenSessionCheckpoints?.()}
+                                      >
+                                        ${item.action.label}
+                                      </button>
+                                    `
+                                  : nothing}
+                              </div>
+                            `
+                          : nothing}
+                      </div>
+                    `;
+                  }
+                  if (item.kind === "stream-run") {
+                    return html`
+                      ${stagePrefix}
+                      ${liveCard
+                        ? renderRunStageCard(liveCard, { live: true, nowMs: Date.now() })
+                        : nothing}
+                      ${renderStreamGroup(item.parts, {
+                        onOpenSidebar: props.onOpenSidebar,
+                        assistant: assistantIdentity,
+                        basePath: props.basePath,
+                        authToken: props.assistantAttachmentAuthToken ?? null,
+                        thinkingStream:
+                          showReasoning && props.thinkingStream?.trim()
+                            ? props.thinkingStream
+                            : null,
+                        showReasoning,
+                      })}
+                    `;
+                  }
+                  if (item.kind === "group") {
+                    if (deleted.has(item.key)) {
+                      return nothing;
+                    }
+                    return html`
+                      ${stagePrefix}
+                      ${renderMessageGroup(item, {
+                        onOpenSidebar: props.onOpenSidebar,
+                        sessionKey: props.sessionKey,
+                        agentId: props.fullMessageAgentId,
+                        showReasoning,
+                        showToolCalls: props.showToolCalls,
+                        autoExpandToolCalls: Boolean(props.autoExpandToolCalls),
+                        isToolMessageExpanded: (messageId: string) =>
+                          expandedToolCards.get(messageId),
+                        onToggleToolMessageExpanded: (messageId: string, expanded?: boolean) => {
+                          expandedToolCards.set(
+                            messageId,
+                            !(expanded ?? expandedToolCards.get(messageId) ?? false),
+                          );
+                          requestUpdate();
+                        },
+                        isToolExpanded: (toolCardId: string) =>
+                          expandedToolCards.get(toolCardId) ?? false,
+                        onToggleToolExpanded: toggleToolCardExpanded,
+                        onRequestUpdate: requestUpdate,
+                        onAssistantAttachmentLoaded: props.onAssistantAttachmentLoaded,
+                        assistantName: props.assistantName,
+                        assistantAvatar: assistantIdentity.avatar,
+                        userName: props.userName ?? null,
+                        userAvatar: props.userAvatar ?? null,
+                        basePath: props.basePath,
+                        localMediaPreviewRoots: props.localMediaPreviewRoots ?? [],
+                        assistantAttachmentAuthToken: props.assistantAttachmentAuthToken ?? null,
+                        canvasPluginSurfaceUrl: props.canvasPluginSurfaceUrl,
+                        embedSandboxMode: props.embedSandboxMode ?? "scripts",
+                        allowExternalEmbedUrls: props.allowExternalEmbedUrls ?? false,
+                        contextWindow: threadContextWindow,
+                        onDelete: () => {
+                          deleted.delete(item.key);
+                          requestUpdate();
+                        },
+                      })}
+                    `;
+                  }
+                  return nothing;
+                },
+              )}
+              ${trailingCards.map((card) => renderRunStageCard(card, { live: false }))}
+              ${!coalesced.some((it) => it.kind === "stream-run") && liveCard
+                ? renderRunStageCard(liveCard, { live: true, nowMs: Date.now() })
+                : nothing}
+            `;
+          },
         )}
         ${renderRealtimeTalkConversation(props)}
       </div>

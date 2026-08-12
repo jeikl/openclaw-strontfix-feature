@@ -5,6 +5,7 @@ import { formatUnknownText, truncateText } from "../../lib/format.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { uiSessionEventMatches } from "../../lib/sessions/session-key.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
+import { createRunStageCardId, saveRunStageCard, type ChatRunStageCard } from "./run-stage-ui.ts";
 
 const TOOL_STREAM_LIMIT = 50;
 const TOOL_STREAM_THROTTLE_MS = 80;
@@ -319,9 +320,8 @@ export function resetToolStream(host: ToolStreamHost) {
   if ("chatThinkingStream" in host) {
     host.chatThinkingStream = null;
   }
-  if ("chatRunStages" in host) {
-    host.chatRunStages = [];
-  }
+  // Do NOT clear chatRunStages here — stage cards are kept for diagnosis and
+  // persisted client-side; resetToolStream runs on many terminal paths.
 }
 
 function upsertRunStage(host: ToolStreamHost, entry: ChatRunStageEntry): void {
@@ -345,6 +345,41 @@ function upsertRunStage(host: ToolStreamHost, entry: ChatRunStageEntry): void {
     stages.push(entry);
   }
   host.chatRunStages = stages;
+  persistLiveRunStageCard(host, stages);
+}
+
+/** UI-only: mirror live stages into session localStorage + in-memory cards. */
+function persistLiveRunStageCard(host: ToolStreamHost, stages: ChatRunStageEntry[]): void {
+  try {
+    const hostAny = host as ToolStreamHost & {
+      sessionKey?: string;
+      chatRunId?: string | null;
+      chatRunStageCardId?: string | null;
+      chatRunStageCards?: ChatRunStageCard[];
+    };
+    if (!hostAny.sessionKey || stages.length === 0) {
+      return;
+    }
+    const cardId = hostAny.chatRunStageCardId ?? createRunStageCardId(hostAny.chatRunId ?? null);
+    hostAny.chatRunStageCardId = cardId;
+    const startedAt = stages.reduce((min, s) => Math.min(min, s.startedAt), stages[0].startedAt);
+    const allDone = stages.every((s) => !s.active);
+    const card: ChatRunStageCard = {
+      id: cardId,
+      sessionKey: hostAny.sessionKey,
+      runId: hostAny.chatRunId ?? null,
+      startedAt,
+      endedAt: allDone
+        ? stages.reduce((max, s) => Math.max(max, s.endedAt ?? 0), 0) || Date.now()
+        : null,
+      stages: stages.map((s) => ({ ...s })),
+    };
+    saveRunStageCard(card);
+    const prev = Array.isArray(hostAny.chatRunStageCards) ? hostAny.chatRunStageCards : [];
+    hostAny.chatRunStageCards = [...prev.filter((c) => c.id !== card.id), card];
+  } catch {
+    // ignore
+  }
 }
 
 function handleRunStageEvent(host: ToolStreamHost, payload: AgentEventPayload): void {

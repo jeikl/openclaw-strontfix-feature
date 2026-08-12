@@ -42,7 +42,6 @@ import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "../inp
 import type { RealtimeTalkConversationEntry } from "../realtime-talk-conversation.ts";
 import type { RealtimeTalkStatus } from "../realtime-talk.ts";
 import { CHAT_RUN_STATUS_TOAST_DURATION_MS, type ChatRunUiStatus } from "../run-lifecycle.ts";
-import type { ChatRunStageEntry } from "../tool-stream.ts";
 import type { CompactionStatus, FallbackStatus } from "../tool-stream.ts";
 
 const COMPACTION_TOAST_DURATION_MS = 5000;
@@ -80,7 +79,6 @@ type ChatComposerProps = {
   messages: unknown[];
   stream: string | null;
   thinkingStream?: string | null;
-  runStages?: ChatRunStageEntry[] | null;
   sideResult?: ChatSideResult | null;
   queue: ChatQueueItem[];
   draft: string;
@@ -1261,63 +1259,6 @@ type ComposerRunStatus =
       phase: "in-progress";
       occurredAt?: number | null;
     };
-
-function formatStageSeconds(ms: number): string {
-  if (!Number.isFinite(ms) || ms < 0) {
-    return "0.0s";
-  }
-  if (ms < 10_000) {
-    return `${(ms / 1000).toFixed(1)}s`;
-  }
-  return `${(ms / 1000).toFixed(0)}s`;
-}
-
-/** Pipeline stage list with wall-clock seconds (Control UI diagnosis). */
-export function renderRunStagePanel(
-  stages: ChatRunStageEntry[] | null | undefined,
-  nowMs = Date.now(),
-) {
-  if (!stages || stages.length === 0) {
-    return nothing;
-  }
-  // Keep last completed turn visible briefly; always show while any stage active.
-  const hasActive = stages.some((s) => s.active);
-  const lastEnded = stages.reduce((max, s) => Math.max(max, s.endedAt ?? 0), 0);
-  if (!hasActive && lastEnded > 0 && nowMs - lastEnded > 45_000) {
-    return nothing;
-  }
-  return html`
-    <div
-      class="agent-chat__run-stages"
-      role="status"
-      aria-live="polite"
-      aria-label="Run stage timings"
-    >
-      <div class="agent-chat__run-stages-title">关键路径耗时</div>
-      <ul class="agent-chat__run-stages-list">
-        ${stages.map((stage) => {
-          const elapsedMs = stage.active
-            ? Math.max(0, nowMs - stage.startedAt)
-            : (stage.durationMs ??
-              (stage.endedAt != null ? Math.max(0, stage.endedAt - stage.startedAt) : 0));
-          return html`
-            <li
-              class="agent-chat__run-stage ${stage.active
-                ? "agent-chat__run-stage--active"
-                : "agent-chat__run-stage--done"}"
-            >
-              <span class="agent-chat__run-stage-label">
-                ${stage.active ? html`<span class="agent-chat__run-stage-dot"></span>` : nothing}
-                ${stage.label}
-              </span>
-              <span class="agent-chat__run-stage-time">${formatStageSeconds(elapsedMs)}</span>
-            </li>
-          `;
-        })}
-      </ul>
-    </div>
-  `;
-}
 
 export function renderChatRunStatusIndicator(
   status: ComposerRunStatus | null | undefined,
@@ -2506,7 +2447,6 @@ export function renderChatComposer(props: ChatComposerProps) {
         </div>
 
         <div class="agent-chat__composer-footer">
-          ${renderRunStagePanel(props.runStages)}
           ${composerControls !== nothing
             ? html`
                 <div class="agent-chat__composer-controls">

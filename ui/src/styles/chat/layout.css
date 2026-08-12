@@ -993,16 +993,29 @@ openclaw-chat-page {
   padding: 0;
 }
 
-/* High-latency pipeline stage timings (Control UI diagnosis) */
+/* High-latency pipeline stage timings (Control UI diagnosis, above assistant reply) */
+.chat-run-stage-card {
+  display: flex;
+  justify-content: flex-start;
+  width: 100%;
+  max-width: min(520px, 92%);
+  margin: 4px 0 8px 44px;
+}
+
+.chat-run-stage-card--live .agent-chat__run-stages {
+  border-color: rgba(167, 139, 250, 0.55);
+}
+
 .agent-chat__run-stages {
   width: 100%;
-  margin: 0 0 8px;
+  margin: 0;
   padding: 8px 10px;
   border-radius: 10px;
   border: 1px solid rgba(124, 58, 237, 0.28);
-  background: rgba(109, 40, 217, 0.08);
+  background: rgba(109, 40, 217, 0.12);
   font-size: 12px;
   line-height: 1.35;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
 }
 
 .agent-chat__run-stages-title {

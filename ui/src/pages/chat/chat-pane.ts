@@ -846,6 +846,7 @@ class ChatPane extends LitElement {
       stream: state.chatStream,
       thinkingStream: state.chatThinkingStream,
       runStages: state.chatRunStages,
+      runStageCards: state.chatRunStageCards,
       streamStartedAt: state.chatStreamStartedAt,
       assistantAvatarUrl: resolveChatAvatarUrl(state),
       sendShortcut: state.settings.chatSendShortcut,
