@@ -1,10 +1,12 @@
 /**
  * Control UI-only run stage timings + thinking segments.
  *
- * Persistence: browser localStorage by sessionKey.
+ * Primary persistence: gateway disk store (~/.openclaw/run-stage-cards/) so
+ * remote browsers see the same diagnosis cards. localStorage is a soft cache.
  * Never written into chat history, transcripts, or model context.
  */
 import { html, nothing } from "lit";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import type { ChatRunStageEntry } from "./tool-stream.ts";
 
@@ -82,6 +84,52 @@ export function loadRunStageCardsForSession(sessionKey: string): ChatRunStageCar
   return Array.isArray(cards) ? cards.map(normalizeCard).slice() : [];
 }
 
+/** Load diagnosis cards from gateway (shared across remote browsers). */
+export async function loadRunStageCardsFromGateway(
+  client: GatewayBrowserClient | null | undefined,
+  sessionKey: string,
+): Promise<ChatRunStageCard[]> {
+  const key = sessionKey.trim();
+  if (!client || !key) {
+    return loadRunStageCardsForSession(key);
+  }
+  try {
+    const result = await client.request<{ sessionKey?: string; cards?: ChatRunStageCard[] }>(
+      "sessions.runStages.get",
+      { sessionKey: key, key },
+    );
+    const cards = Array.isArray(result?.cards) ? result.cards.map(normalizeCard) : [];
+    // Soft-cache for offline refresh
+    if (cards.length > 0) {
+      const store = readStore();
+      store.bySession[key] = cards.slice(-MAX_CARDS_PER_SESSION);
+      writeStore(store);
+    }
+    return cards;
+  } catch {
+    return loadRunStageCardsForSession(key);
+  }
+}
+
+/** Best-effort push of one card to the gateway store. */
+export async function putRunStageCardToGateway(
+  client: GatewayBrowserClient | null | undefined,
+  card: ChatRunStageCard,
+): Promise<void> {
+  if (!client || !card.sessionKey.trim()) {
+    return;
+  }
+  try {
+    await client.request("sessions.runStages.put", {
+      sessionKey: card.sessionKey,
+      key: card.sessionKey,
+      card,
+    });
+  } catch {
+    // ignore — server auto-persist is the primary path
+  }
+}
+
 function normalizeCard(card: ChatRunStageCard): ChatRunStageCard {
   if (card.thinkingSegments?.length) {
     return card;
@@ -117,6 +165,15 @@ export function saveRunStageCard(card: ChatRunStageCard): void {
     idx >= 0 ? existing.map((c, i) => (i === idx ? normalized : c)) : [...existing, normalized];
   store.bySession[key] = next.slice(-MAX_CARDS_PER_SESSION);
   writeStore(store);
+}
+
+/** localStorage cache + optional gateway write (remote browsers share server store). */
+export function saveRunStageCardEverywhere(
+  card: ChatRunStageCard,
+  client?: GatewayBrowserClient | null,
+): void {
+  saveRunStageCard(card);
+  void putRunStageCardToGateway(client, card);
 }
 
 export function createRunStageCardId(runId: string | null): string {

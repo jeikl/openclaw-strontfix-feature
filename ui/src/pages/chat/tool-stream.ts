@@ -9,6 +9,7 @@ import {
   appendThinkingToSegments,
   createRunStageCardId,
   saveRunStageCard,
+  saveRunStageCardEverywhere,
   sealOpenThinkingSegments,
   type ChatRunStageCard,
   type ChatThinkingSegment,
@@ -420,7 +421,9 @@ function persistLiveRunStageCard(
             : (prevCard?.thinkingDurationMs ?? null),
       thinkingSegments,
     };
-    saveRunStageCard(card);
+    const client = (host as { client?: import("../../api/gateway.ts").GatewayBrowserClient | null })
+      .client;
+    saveRunStageCardEverywhere(card, client);
     const prev = Array.isArray(hostAny.chatRunStageCards) ? hostAny.chatRunStageCards : [];
     hostAny.chatRunStageCards = [...prev.filter((c) => c.id !== card.id), card];
   } catch {

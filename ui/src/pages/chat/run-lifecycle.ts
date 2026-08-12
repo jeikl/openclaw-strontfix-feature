@@ -16,7 +16,7 @@ import { resetChatInputHistoryNavigation, type ChatInputHistoryState } from "./i
 import {
   appendThinkingToSegments,
   createRunStageCardId,
-  saveRunStageCard,
+  saveRunStageCardEverywhere,
   sealOpenThinkingSegments,
   type ChatRunStageCard,
 } from "./run-stage-ui.ts";
@@ -389,7 +389,10 @@ export function reconcileChatRunLifecycle(host: RunLifecycleHost, options: Recon
             totalThinkingMs > 0 ? totalThinkingMs : (prevCard?.thinkingDurationMs ?? null),
           thinkingSegments,
         };
-        saveRunStageCard(card);
+        const client = (
+          host as { client?: import("../../api/gateway.ts").GatewayBrowserClient | null }
+        ).client;
+        saveRunStageCardEverywhere(card, client);
         const prev = Array.isArray(hostAny.chatRunStageCards) ? hostAny.chatRunStageCards : [];
         hostAny.chatRunStageCards = [...prev.filter((c) => c.id !== card.id), card];
         // Clear live buffers; the persisted card (incl. thinking text) remains for UI.

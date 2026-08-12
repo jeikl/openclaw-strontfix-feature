@@ -2510,6 +2510,64 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       });
     }
   },
+  /**
+   * WebUI diagnosis: load server-persisted run-stage cards for a session.
+   * Not transcript / model context — files under ~/.openclaw/run-stage-cards/.
+   */
+  "sessions.runStages.get": async ({ params, respond }) => {
+    const p = params as { key?: unknown; sessionKey?: unknown };
+    const key = requireSessionKey(p.key ?? p.sessionKey, respond);
+    if (!key) {
+      return;
+    }
+    try {
+      const { listRunStageCardsForSession } = await import("../../infra/run-stage-store.js");
+      const cards = listRunStageCardsForSession(key);
+      respond(true, { sessionKey: key, cards }, undefined);
+    } catch (error) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
+    }
+  },
+  /**
+   * WebUI diagnosis: upsert one run-stage card (optional client sync).
+   * Server already auto-persists from agent events; this is a best-effort merge.
+   */
+  "sessions.runStages.put": async ({ params, respond }) => {
+    const p = params as {
+      key?: unknown;
+      sessionKey?: unknown;
+      card?: unknown;
+    };
+    const key = requireSessionKey(p.key ?? p.sessionKey, respond);
+    if (!key) {
+      return;
+    }
+    if (!p.card || typeof p.card !== "object") {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "card object is required"));
+      return;
+    }
+    try {
+      const { saveRunStageCardToStore } = await import("../../infra/run-stage-store.js");
+      const card = p.card as Record<string, unknown>;
+      saveRunStageCardToStore({
+        id: typeof card.id === "string" ? card.id : `stage-card:${Date.now()}`,
+        sessionKey: key,
+        runId: typeof card.runId === "string" ? card.runId : null,
+        startedAt: typeof card.startedAt === "number" ? card.startedAt : Date.now(),
+        endedAt: typeof card.endedAt === "number" ? card.endedAt : null,
+        stages: Array.isArray(card.stages) ? (card.stages as never[]) : [],
+        thinkingText: typeof card.thinkingText === "string" ? card.thinkingText : null,
+        thinkingDurationMs:
+          typeof card.thinkingDurationMs === "number" ? card.thinkingDurationMs : null,
+        thinkingSegments: Array.isArray(card.thinkingSegments)
+          ? (card.thinkingSegments as never[])
+          : undefined,
+      });
+      respond(true, { ok: true, sessionKey: key }, undefined);
+    } catch (error) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
+    }
+  },
   "sessions.get": async ({ params, respond, context }) => {
     const p = params as {
       key?: unknown;

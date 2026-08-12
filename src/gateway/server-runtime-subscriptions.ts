@@ -16,6 +16,7 @@ import {
   removeChatAbortControllerEntry,
   type RestartRecoveryCandidate,
 } from "./chat-abort.js";
+import { startRunStagePersistence } from "./run-stage-persistence.js";
 import type {
   ChatRunState,
   SessionEventSubscriberRegistry,
@@ -235,6 +236,10 @@ export function startGatewayEventSubscriptions(params: {
     return lifecycleEventHandlerPromise;
   };
 
+  // WebUI diagnosis cards: persist run_stage + thinking server-side so remote
+  // browsers can load them (not model context / transcript).
+  const stopRunStagePersistence = startRunStagePersistence();
+
   const unsubscribeAgentEvents = onAgentEvent((evt) => {
     auditRecorder?.record(evt);
     const lifecyclePhase =
@@ -288,6 +293,7 @@ export function startGatewayEventSubscriptions(params: {
     });
   });
   const agentUnsub = async () => {
+    stopRunStagePersistence();
     unsubscribeAgentEvents();
     unsubscribePrivateAuditEvents?.();
     unsubscribeToolAuditEvents?.();

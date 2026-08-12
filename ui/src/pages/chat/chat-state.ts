@@ -97,7 +97,7 @@ import {
   reconcileChatRunLifecycle,
   reconcileStaleChatRunAfterSessionStatePublication,
 } from "./run-lifecycle.ts";
-import { loadRunStageCardsForSession } from "./run-stage-ui.ts";
+import { loadRunStageCardsForSession, loadRunStageCardsFromGateway } from "./run-stage-ui.ts";
 import { scheduleChatScroll, handleChatScroll, resetChatScroll } from "./scroll.ts";
 import { cacheChatMessages, readChatMessagesFromCache } from "./session-message-cache.ts";
 import {
@@ -349,8 +349,18 @@ export function resetChatStateForRouteSession(state: ChatPageHost, sessionKey: s
   state.chatThinkingStream = null;
   state.chatRunStages = [];
   state.chatRunStageCardId = null;
-  // Load UI-only stage cards for this session (not from transcript / model context).
+  // Load UI-only stage cards: prefer gateway disk store (works for remote browsers),
+  // fall back to localStorage cache. Never model context.
   state.chatRunStageCards = loadRunStageCardsForSession(sessionKey);
+  void loadRunStageCardsFromGateway(state.client, sessionKey).then((cards) => {
+    if (!areUiSessionKeysEquivalent(state.sessionKey, sessionKey)) {
+      return;
+    }
+    if (cards.length > 0) {
+      state.chatRunStageCards = cards;
+      state.requestUpdate?.();
+    }
+  });
   state.chatSideResult = null;
   state.lastError = null;
   state.chatError = null;
