@@ -13,7 +13,13 @@ import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import { formatConnectError } from "./connect-error.ts";
 import { resetChatInputHistoryNavigation, type ChatInputHistoryState } from "./input-history.ts";
 // Control UI chat module implements run lifecycle behavior.
-import { createRunStageCardId, saveRunStageCard, type ChatRunStageCard } from "./run-stage-ui.ts";
+import {
+  appendThinkingToSegments,
+  createRunStageCardId,
+  saveRunStageCard,
+  sealOpenThinkingSegments,
+  type ChatRunStageCard,
+} from "./run-stage-ui.ts";
 import {
   resetToolStream,
   type ChatRunStageEntry,
@@ -354,7 +360,16 @@ export function reconcileChatRunLifecycle(host: RunLifecycleHost, options: Recon
           finalized.length > 0
             ? finalized.reduce((min, s) => Math.min(min, s.startedAt), finalized[0].startedAt)
             : (prevCard?.startedAt ?? endedAt);
-        const thinkingStage = finalized.find((s) => s.stage === "thinking");
+        let thinkingSegments = prevCard?.thinkingSegments?.slice() ?? [];
+        if (thinkingText) {
+          thinkingSegments = appendThinkingToSegments({
+            cardId,
+            segments: thinkingSegments,
+            text: thinkingText,
+          });
+        }
+        thinkingSegments = sealOpenThinkingSegments(thinkingSegments, endedAt);
+        const totalThinkingMs = thinkingSegments.reduce((sum, s) => sum + (s.durationMs ?? 0), 0);
         const card: ChatRunStageCard = {
           id: cardId,
           sessionKey: hostAny.sessionKey,
@@ -362,9 +377,17 @@ export function reconcileChatRunLifecycle(host: RunLifecycleHost, options: Recon
           startedAt,
           endedAt,
           stages: finalized,
-          // Capture thinking BEFORE clearing the live stream buffer.
-          thinkingText: thinkingText || prevCard?.thinkingText || null,
-          thinkingDurationMs: thinkingStage?.durationMs ?? prevCard?.thinkingDurationMs ?? null,
+          thinkingText:
+            thinkingSegments
+              .map((s) => s.text.trim())
+              .filter(Boolean)
+              .join("\n\n---\n\n") ||
+            thinkingText ||
+            prevCard?.thinkingText ||
+            null,
+          thinkingDurationMs:
+            totalThinkingMs > 0 ? totalThinkingMs : (prevCard?.thinkingDurationMs ?? null),
+          thinkingSegments,
         };
         saveRunStageCard(card);
         const prev = Array.isArray(hostAny.chatRunStageCards) ? hostAny.chatRunStageCards : [];

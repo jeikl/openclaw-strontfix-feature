@@ -5,7 +5,14 @@ import { formatUnknownText, truncateText } from "../../lib/format.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { uiSessionEventMatches } from "../../lib/sessions/session-key.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
-import { createRunStageCardId, saveRunStageCard, type ChatRunStageCard } from "./run-stage-ui.ts";
+import {
+  appendThinkingToSegments,
+  createRunStageCardId,
+  saveRunStageCard,
+  sealOpenThinkingSegments,
+  type ChatRunStageCard,
+  type ChatThinkingSegment,
+} from "./run-stage-ui.ts";
 
 const TOOL_STREAM_LIMIT = 50;
 const TOOL_STREAM_THROTTLE_MS = 80;
@@ -348,8 +355,12 @@ function upsertRunStage(host: ToolStreamHost, entry: ChatRunStageEntry): void {
   persistLiveRunStageCard(host, stages);
 }
 
-/** UI-only: mirror live stages + thinking text into session localStorage cards. */
-function persistLiveRunStageCard(host: ToolStreamHost, stages: ChatRunStageEntry[]): void {
+/** UI-only: mirror live stages + multi-round thinking into localStorage cards. */
+function persistLiveRunStageCard(
+  host: ToolStreamHost,
+  stages: ChatRunStageEntry[],
+  opts?: { forceNewThinkingSegment?: boolean },
+): void {
   try {
     const hostAny = host as ToolStreamHost & {
       sessionKey?: string;
@@ -368,9 +379,22 @@ function persistLiveRunStageCard(host: ToolStreamHost, stages: ChatRunStageEntry
         ? stages.reduce((min, s) => Math.min(min, s.startedAt), stages[0].startedAt)
         : Date.now();
     const allDone = stages.length > 0 && stages.every((s) => !s.active);
-    const thinkingStage = stages.find((s) => s.stage === "thinking");
-    const thinkingText = hostAny.chatThinkingStream?.trim() || null;
+    const thinkingStage = stages.find((s) => s.stage === "thinking" && s.active);
+    const thinkingText = hostAny.chatThinkingStream?.trim() || "";
     const prevCard = (hostAny.chatRunStageCards ?? []).find((c) => c.id === cardId);
+    let thinkingSegments: ChatThinkingSegment[] = prevCard?.thinkingSegments?.slice() ?? [];
+    if (thinkingText) {
+      thinkingSegments = appendThinkingToSegments({
+        cardId,
+        segments: thinkingSegments,
+        text: thinkingText,
+        forceNewSegment: opts?.forceNewThinkingSegment === true,
+      });
+    }
+    if (allDone) {
+      thinkingSegments = sealOpenThinkingSegments(thinkingSegments);
+    }
+    const totalThinkingMs = thinkingSegments.reduce((sum, s) => sum + (s.durationMs ?? 0), 0);
     const card: ChatRunStageCard = {
       id: cardId,
       sessionKey: hostAny.sessionKey,
@@ -380,12 +404,21 @@ function persistLiveRunStageCard(host: ToolStreamHost, stages: ChatRunStageEntry
         ? stages.reduce((max, s) => Math.max(max, s.endedAt ?? 0), 0) || Date.now()
         : null,
       stages: stages.map((s) => ({ ...s })),
-      // Keep longer of previous / current thinking so finalize can't wipe text.
-      thinkingText: thinkingText || prevCard?.thinkingText || null,
+      thinkingText:
+        thinkingSegments
+          .map((s) => s.text.trim())
+          .filter(Boolean)
+          .join("\n\n---\n\n") ||
+        thinkingText ||
+        prevCard?.thinkingText ||
+        null,
       thinkingDurationMs:
-        thinkingStage?.durationMs ??
-        prevCard?.thinkingDurationMs ??
-        (thinkingStage?.active ? Math.max(0, Date.now() - thinkingStage.startedAt) : null),
+        totalThinkingMs > 0
+          ? totalThinkingMs
+          : thinkingStage
+            ? Math.max(0, Date.now() - thinkingStage.startedAt)
+            : (prevCard?.thinkingDurationMs ?? null),
+      thinkingSegments,
     };
     saveRunStageCard(card);
     const prev = Array.isArray(hostAny.chatRunStageCards) ? hostAny.chatRunStageCards : [];
@@ -410,6 +443,35 @@ function handleRunStageEvent(host: ToolStreamHost, payload: AgentEventPayload): 
         ? payload.ts
         : Date.now();
   if (phase === "start") {
+    // New thinking stage → seal prior thinking burst so multi-round stays readable.
+    if (stage === "thinking") {
+      const hostAny = host as ToolStreamHost & {
+        chatThinkingStream?: string | null;
+        chatRunStageCardId?: string | null;
+        chatRunStageCards?: ChatRunStageCard[];
+        sessionKey?: string;
+        chatRunId?: string | null;
+      };
+      const stagesNow = Array.isArray(host.chatRunStages) ? host.chatRunStages : [];
+      if (hostAny.chatThinkingStream?.trim()) {
+        persistLiveRunStageCard(host, stagesNow);
+      }
+      const cardId = hostAny.chatRunStageCardId;
+      if (cardId && Array.isArray(hostAny.chatRunStageCards)) {
+        hostAny.chatRunStageCards = hostAny.chatRunStageCards.map((c) => {
+          if (c.id !== cardId) {
+            return c;
+          }
+          const sealed = sealOpenThinkingSegments(c.thinkingSegments);
+          return { ...c, thinkingSegments: sealed };
+        });
+        const updated = hostAny.chatRunStageCards.find((c) => c.id === cardId);
+        if (updated) {
+          saveRunStageCard(updated);
+        }
+      }
+      hostAny.chatThinkingStream = "";
+    }
     upsertRunStage(host, {
       stage,
       label,
