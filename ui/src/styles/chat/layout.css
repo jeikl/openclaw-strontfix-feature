@@ -1006,6 +1006,11 @@ openclaw-chat-page {
   border-color: rgba(167, 139, 250, 0.55);
 }
 
+.chat-run-stage-card__thinking {
+  margin-top: 8px;
+  width: 100%;
+}
+
 .agent-chat__run-stages {
   width: 100%;
   margin: 0;

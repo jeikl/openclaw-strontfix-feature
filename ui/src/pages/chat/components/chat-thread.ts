@@ -825,6 +825,11 @@ export function renderChatThread(props: ChatThreadProps) {
             }
             // Cards with no message anchor yet (refresh mid-history edge): show once at end.
             const trailingCards = historyCards.filter((c) => !usedCardIds.has(c.id));
+            const liveThinkingText = props.thinkingStream?.trim() || null;
+            // Prefer in-memory card's saved thinking when live stream was cleared.
+            const liveMemCard = (props.runStageCards ?? []).find(
+              (c) => c.endedAt == null || (showLiveCard && c.id !== "live"),
+            );
             const liveCard = showLiveCard
               ? {
                   id: "live",
@@ -833,9 +838,10 @@ export function renderChatThread(props: ChatThreadProps) {
                   startedAt: liveStages[0]?.startedAt ?? Date.now(),
                   endedAt: null as number | null,
                   stages: liveStages,
+                  thinkingText: liveThinkingText || liveMemCard?.thinkingText || null,
+                  thinkingDurationMs: resolveThinkingDurationMs(liveStages),
                 }
               : null;
-            const liveThinkingMs = resolveThinkingDurationMs(liveStages);
 
             return html`
               ${repeat(
@@ -844,11 +850,17 @@ export function renderChatThread(props: ChatThreadProps) {
                 (item) => {
                   const cardsAbove = cardsBeforeKey.get(item.key) ?? [];
                   const stagePrefix = html`${cardsAbove.map((card) =>
-                    renderRunStageCard(card, { live: false }),
+                    renderRunStageCard(card, {
+                      live: false,
+                      // Historical: collapsed thinking with duration on the card itself.
+                      thinkingText: card.thinkingText,
+                      thinkingStreaming: false,
+                    }),
                   )}`;
                   const thinkingMsForGroup =
                     cardsAbove.length > 0
-                      ? resolveThinkingDurationMs(cardsAbove[cardsAbove.length - 1]?.stages)
+                      ? (cardsAbove[cardsAbove.length - 1]?.thinkingDurationMs ??
+                        resolveThinkingDurationMs(cardsAbove[cardsAbove.length - 1]?.stages))
                       : null;
                   if (item.kind === "divider") {
                     return html`
@@ -889,15 +901,12 @@ export function renderChatThread(props: ChatThreadProps) {
                     return html`
                       ${stagePrefix}
                       ${liveCard
-                        ? renderRunStageCard(liveCard, { live: true, nowMs: Date.now() })
-                        : nothing}
-                      ${hasLiveThinking
-                        ? html`<div class="chat-run-stage-card chat-run-stage-card--thinking">
-                            ${renderThinkingPanelInline(props.thinkingStream!, {
-                              streaming: true,
-                              durationMs: liveThinkingMs,
-                            })}
-                          </div>`
+                        ? renderRunStageCard(liveCard, {
+                            live: true,
+                            nowMs: Date.now(),
+                            thinkingText: liveCard.thinkingText,
+                            thinkingStreaming: Boolean(liveThinkingText),
+                          })
                         : nothing}
                       ${renderStreamGroup(item.parts, {
                         onOpenSidebar: props.onOpenSidebar,
@@ -905,6 +914,7 @@ export function renderChatThread(props: ChatThreadProps) {
                         basePath: props.basePath,
                         authToken: props.assistantAttachmentAuthToken ?? null,
                         thinkingStream: null,
+                        // Thinking is on the stage card (WebUI-only); avoid a second copy.
                         showReasoning: false,
                       })}
                     `;
@@ -913,15 +923,16 @@ export function renderChatThread(props: ChatThreadProps) {
                     if (deleted.has(item.key)) {
                       return nothing;
                     }
+                    // Prefer thinking on the stage card; only fall back to message
+                    // extractThinking when the card has no thinkingText.
+                    const cardHasThinking = cardsAbove.some((c) => Boolean(c.thinkingText?.trim()));
                     return html`
                       ${stagePrefix}
                       ${renderMessageGroup(item, {
                         onOpenSidebar: props.onOpenSidebar,
                         sessionKey: props.sessionKey,
                         agentId: props.fullMessageAgentId,
-                        // WebUI-only diagnosis: still show thinking from message
-                        // blocks, but collapsed after final (see renderThinkingPanel).
-                        showReasoning,
+                        showReasoning: showReasoning && !cardHasThinking,
                         thinkingDurationMs: thinkingMsForGroup,
                         showToolCalls: props.showToolCalls,
                         autoExpandToolCalls: Boolean(props.autoExpandToolCalls),

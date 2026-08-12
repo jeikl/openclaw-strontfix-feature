@@ -19,6 +19,10 @@ export type ChatRunStageCard = {
   startedAt: number;
   endedAt: number | null;
   stages: ChatRunStageEntry[];
+  /** Full thinking/reasoning text for this turn (WebUI only; not model context). */
+  thinkingText?: string | null;
+  /** Wall time for model thinking stage, if known. */
+  thinkingDurationMs?: number | null;
 };
 
 type StoreShape = {
@@ -137,24 +141,86 @@ export function renderRunStagePanel(
   `;
 }
 
-/** Render a persisted or live stage card above an assistant turn. */
+function resolveCardThinkingDurationMs(card: ChatRunStageCard, nowMs: number): number | null {
+  if (card.thinkingDurationMs != null && Number.isFinite(card.thinkingDurationMs)) {
+    return card.thinkingDurationMs;
+  }
+  const thinking = card.stages.find((s) => s.stage === "thinking");
+  if (!thinking) {
+    return null;
+  }
+  if (thinking.durationMs != null && Number.isFinite(thinking.durationMs)) {
+    return thinking.durationMs;
+  }
+  if (thinking.active) {
+    return Math.max(0, nowMs - thinking.startedAt);
+  }
+  return null;
+}
+
+/** Render a persisted or live stage card above an assistant turn (incl. thinking). */
 export function renderRunStageCard(
   card: ChatRunStageCard,
-  options?: { nowMs?: number; live?: boolean },
+  options?: {
+    nowMs?: number;
+    live?: boolean;
+    thinkingText?: string | null;
+    thinkingStreaming?: boolean;
+  },
 ) {
-  if (!card.stages.length) {
+  const thinkingText = (options?.thinkingText ?? card.thinkingText ?? "").trim();
+  if (!card.stages.length && !thinkingText) {
     return nothing;
   }
   const live = options?.live === true || card.stages.some((s) => s.active);
+  const nowMs = options?.nowMs ?? Date.now();
+  const thinkingStreaming = options?.thinkingStreaming === true;
+  const thinkingMs = resolveCardThinkingDurationMs(
+    {
+      ...card,
+      thinkingText,
+    },
+    nowMs,
+  );
+  const durationLabel =
+    thinkingMs == null
+      ? null
+      : thinkingMs < 10_000
+        ? `${(thinkingMs / 1000).toFixed(1)}s`
+        : `${Math.round(thinkingMs / 1000)}s`;
   return html`
     <div
       class="chat-run-stage-card ${live ? "chat-run-stage-card--live" : ""}"
       data-stage-card-id=${card.id}
     >
-      ${renderRunStagePanel(card.stages, {
-        nowMs: options?.nowMs,
-        title: live ? "关键路径耗时" : "关键路径耗时（本轮）",
-      })}
+      ${card.stages.length
+        ? renderRunStagePanel(card.stages, {
+            nowMs,
+            title: live ? "关键路径耗时" : "关键路径耗时（本轮）",
+          })
+        : nothing}
+      ${thinkingText
+        ? html`<div class="chat-run-stage-card__thinking">
+            <details class="chat-thinking-panel" ?open=${thinkingStreaming}>
+              <summary class="chat-thinking-panel__summary">
+                <span class="chat-thinking-panel__title">
+                  <span class="chat-thinking-panel__icon" aria-hidden="true">◎</span>
+                  思考过程
+                  ${thinkingStreaming
+                    ? html`<span class="chat-thinking-panel__live" aria-label="streaming">…</span>`
+                    : nothing}
+                  ${durationLabel
+                    ? html`<span class="chat-thinking-panel__duration">${durationLabel}</span>`
+                    : nothing}
+                </span>
+                <span class="chat-thinking-panel__source">WebUI 仅展示</span>
+              </summary>
+              <div class="chat-thinking-panel__body">
+                <pre class="chat-thinking-panel__text">${thinkingText}</pre>
+              </div>
+            </details>
+          </div>`
+        : nothing}
     </div>
   `;
 }

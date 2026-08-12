@@ -348,7 +348,7 @@ function upsertRunStage(host: ToolStreamHost, entry: ChatRunStageEntry): void {
   persistLiveRunStageCard(host, stages);
 }
 
-/** UI-only: mirror live stages into session localStorage + in-memory cards. */
+/** UI-only: mirror live stages + thinking text into session localStorage cards. */
 function persistLiveRunStageCard(host: ToolStreamHost, stages: ChatRunStageEntry[]): void {
   try {
     const hostAny = host as ToolStreamHost & {
@@ -356,14 +356,21 @@ function persistLiveRunStageCard(host: ToolStreamHost, stages: ChatRunStageEntry
       chatRunId?: string | null;
       chatRunStageCardId?: string | null;
       chatRunStageCards?: ChatRunStageCard[];
+      chatThinkingStream?: string | null;
     };
-    if (!hostAny.sessionKey || stages.length === 0) {
+    if (!hostAny.sessionKey || (stages.length === 0 && !hostAny.chatThinkingStream?.trim())) {
       return;
     }
     const cardId = hostAny.chatRunStageCardId ?? createRunStageCardId(hostAny.chatRunId ?? null);
     hostAny.chatRunStageCardId = cardId;
-    const startedAt = stages.reduce((min, s) => Math.min(min, s.startedAt), stages[0].startedAt);
-    const allDone = stages.every((s) => !s.active);
+    const startedAt =
+      stages.length > 0
+        ? stages.reduce((min, s) => Math.min(min, s.startedAt), stages[0].startedAt)
+        : Date.now();
+    const allDone = stages.length > 0 && stages.every((s) => !s.active);
+    const thinkingStage = stages.find((s) => s.stage === "thinking");
+    const thinkingText = hostAny.chatThinkingStream?.trim() || null;
+    const prevCard = (hostAny.chatRunStageCards ?? []).find((c) => c.id === cardId);
     const card: ChatRunStageCard = {
       id: cardId,
       sessionKey: hostAny.sessionKey,
@@ -373,6 +380,12 @@ function persistLiveRunStageCard(host: ToolStreamHost, stages: ChatRunStageEntry
         ? stages.reduce((max, s) => Math.max(max, s.endedAt ?? 0), 0) || Date.now()
         : null,
       stages: stages.map((s) => ({ ...s })),
+      // Keep longer of previous / current thinking so finalize can't wipe text.
+      thinkingText: thinkingText || prevCard?.thinkingText || null,
+      thinkingDurationMs:
+        thinkingStage?.durationMs ??
+        prevCard?.thinkingDurationMs ??
+        (thinkingStage?.active ? Math.max(0, Date.now() - thinkingStage.startedAt) : null),
     };
     saveRunStageCard(card);
     const prev = Array.isArray(hostAny.chatRunStageCards) ? hostAny.chatRunStageCards : [];
@@ -847,6 +860,9 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
       if (!host.chatStreamStartedAt) {
         host.chatStreamStartedAt = Date.now();
       }
+      // Persist thinking text onto the session stage card so it survives finalize/refresh.
+      const stages = Array.isArray(host.chatRunStages) ? host.chatRunStages : [];
+      persistLiveRunStageCard(host, stages);
     }
     return;
   }

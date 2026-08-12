@@ -335,9 +335,11 @@ export function reconcileChatRunLifecycle(host: RunLifecycleHost, options: Recon
         chatRunStages?: ChatRunStageEntry[];
         chatRunStageCards?: ChatRunStageCard[];
         chatRunStageCardId?: string | null;
+        chatThinkingStream?: string | null;
       };
       const stages = Array.isArray(hostAny.chatRunStages) ? hostAny.chatRunStages : [];
-      if (stages.length > 0 && hostAny.sessionKey) {
+      const thinkingText = hostAny.chatThinkingStream?.trim() || null;
+      if ((stages.length > 0 || thinkingText) && hostAny.sessionKey) {
         const endedAt = Date.now();
         const finalized: ChatRunStageEntry[] = stages.map((s) => ({
           ...s,
@@ -347,10 +349,12 @@ export function reconcileChatRunLifecycle(host: RunLifecycleHost, options: Recon
         }));
         const cardId =
           hostAny.chatRunStageCardId ?? createRunStageCardId(hostAny.chatRunId ?? null);
-        const startedAt = finalized.reduce(
-          (min, s) => Math.min(min, s.startedAt),
-          finalized[0]?.startedAt ?? endedAt,
-        );
+        const prevCard = (hostAny.chatRunStageCards ?? []).find((c) => c.id === cardId);
+        const startedAt =
+          finalized.length > 0
+            ? finalized.reduce((min, s) => Math.min(min, s.startedAt), finalized[0].startedAt)
+            : (prevCard?.startedAt ?? endedAt);
+        const thinkingStage = finalized.find((s) => s.stage === "thinking");
         const card: ChatRunStageCard = {
           id: cardId,
           sessionKey: hostAny.sessionKey,
@@ -358,12 +362,14 @@ export function reconcileChatRunLifecycle(host: RunLifecycleHost, options: Recon
           startedAt,
           endedAt,
           stages: finalized,
+          // Capture thinking BEFORE clearing the live stream buffer.
+          thinkingText: thinkingText || prevCard?.thinkingText || null,
+          thinkingDurationMs: thinkingStage?.durationMs ?? prevCard?.thinkingDurationMs ?? null,
         };
         saveRunStageCard(card);
         const prev = Array.isArray(hostAny.chatRunStageCards) ? hostAny.chatRunStageCards : [];
         hostAny.chatRunStageCards = [...prev.filter((c) => c.id !== card.id), card];
-        // Clear live buffer so the thread only shows the persisted card once
-        // (avoids a second "orphan" card under the assistant footer).
+        // Clear live buffers; the persisted card (incl. thinking text) remains for UI.
         hostAny.chatRunStages = [];
         hostAny.chatRunStageCardId = null;
       }
