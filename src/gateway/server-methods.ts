@@ -561,6 +561,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "sessions.unsubscribe",
       "sessions.messages.subscribe",
       "sessions.messages.unsubscribe",
+      // Control UI diagnosis cards (channel + webchat). Must be in this lazy map
+      // or createCoreGatewayMethodDescriptors skips them → "unknown method".
+      "sessions.runStages.get",
+      "sessions.runStages.put",
       "sessions.preview",
       "sessions.describe",
       "sessions.resolve",

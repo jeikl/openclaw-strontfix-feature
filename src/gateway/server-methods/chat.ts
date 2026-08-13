@@ -39,6 +39,12 @@ import {
   resolveAgentWorkspaceDir,
   resolveSessionAgentId,
 } from "../../agents/agent-scope.js";
+import { killRunningExecSessionsForScopes } from "../../agents/bash-process-kill.js";
+import {
+  abortEmbeddedAgentRun,
+  abortEmbeddedAgentRunByRunId,
+  isEmbeddedAgentRunActive,
+} from "../../agents/embedded-agent-runner/runs.js";
 import { rewriteTranscriptEntriesInRuntimeTranscript } from "../../agents/embedded-agent-runner/transcript-rewrite.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
 import { modelCatalogBrowseRequiresFullDiscovery } from "../../agents/model-catalog-browse.js";
@@ -3511,7 +3517,34 @@ export const chatHandlers: GatewayRequestHandlers = {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unauthorized"));
         return;
       }
-      respond(true, { ok: true, aborted: res.aborted, runIds: res.runIds });
+      // Channel-ingress agent turns often never register chatAbortControllers.
+      // Fall back to the embedded/reply-run registry so Control UI Stop works.
+      const embeddedSessionId =
+        typeof entry?.sessionId === "string" && entry.sessionId.trim()
+          ? entry.sessionId.trim()
+          : undefined;
+      let aborted = res.aborted;
+      let runIds = res.runIds;
+      if (!aborted) {
+        if (embeddedSessionId && isEmbeddedAgentRunActive(embeddedSessionId)) {
+          if (abortEmbeddedAgentRun(embeddedSessionId)) {
+            aborted = true;
+            runIds = [embeddedSessionId];
+          }
+        }
+      }
+      // Always free leftover in-progress exec/bash for this session on Stop,
+      // including backgrounded sessions that tool-abort deliberately leaves running.
+      const killedExecs = killRunningExecSessionsForScopes({
+        scopeKeys: [canonicalAbortSessionKey, rawSessionKey, embeddedSessionId],
+      });
+      if (!aborted && killedExecs.attempted > 0) {
+        aborted = true;
+        if (runIds.length === 0) {
+          runIds = killedExecs.sessionIds;
+        }
+      }
+      respond(true, { ok: true, aborted, runIds });
       return;
     }
     const normalizedAgentIdOverride = abortAgentId?.toLowerCase();
@@ -3637,7 +3670,32 @@ export const chatHandlers: GatewayRequestHandlers = {
         });
         return;
       }
-      respond(true, { ok: true, aborted: false, runIds: [] });
+      // Channel agent runIds live in the embedded runner map, not chatAbortControllers.
+      let runAborted = false;
+      let runIds: string[] = [];
+      if (abortEmbeddedAgentRunByRunId(runId)) {
+        runAborted = true;
+        runIds = [runId];
+      } else {
+        const sessionLoadOptions = abortAgentId ? { agentId: abortAgentId } : undefined;
+        const { entry } = loadSessionEntry(rawSessionKey, sessionLoadOptions);
+        const embeddedSessionId =
+          typeof entry?.sessionId === "string" && entry.sessionId.trim()
+            ? entry.sessionId.trim()
+            : undefined;
+        if (embeddedSessionId && abortEmbeddedAgentRun(embeddedSessionId)) {
+          runAborted = true;
+          runIds = [runId, embeddedSessionId];
+        }
+      }
+      const killedExecs = killRunningExecSessionsForScopes({
+        scopeKeys: [canonicalAbortSessionKey, rawSessionKey],
+      });
+      if (!runAborted && killedExecs.attempted > 0) {
+        runAborted = true;
+        runIds = killedExecs.sessionIds;
+      }
+      respond(true, { ok: true, aborted: runAborted, runIds });
       return;
     }
     const abortSessionKeysForRun = new Set([rawSessionKey, canonicalAbortSessionKey]);
@@ -3690,10 +3748,15 @@ export const chatHandlers: GatewayRequestHandlers = {
         ],
       });
     }
+    // Free leftover backgrounded execs for this chat session on Stop.
+    const killedExecs = killRunningExecSessionsForScopes({
+      scopeKeys: [active.sessionKey, active.sessionId, canonicalAbortSessionKey, rawSessionKey],
+    });
+    const aborted = res.aborted || killedExecs.attempted > 0;
     respond(true, {
       ok: true,
-      aborted: res.aborted,
-      runIds: res.aborted ? [runId] : [],
+      aborted,
+      runIds: res.aborted ? [runId] : killedExecs.attempted > 0 ? killedExecs.sessionIds : [],
     });
   },
   "chat.send": async ({ params, respond, context, client }) => {

@@ -1752,11 +1752,11 @@ async function runAgentTurnWithFallbackInternal(
   const agentTurnTiming = createAgentTurnTimingTracker({
     profilerEnabled: isReplyProfilerEnabled({ config: runtimeConfig }),
   });
-  const shouldSurfaceToControlUi = isInternalMessageChannel(
+  const surfaceChannel =
     params.followupRun.run.messageProvider ??
-      params.sessionCtx.Surface ??
-      params.sessionCtx.Provider,
-  );
+    params.sessionCtx.Surface ??
+    params.sessionCtx.Provider;
+  const shouldSurfaceToControlUi = isInternalMessageChannel(surfaceChannel);
   let lifecycleGeneration = captureAgentRunLifecycleGeneration(runId);
   if (params.sessionKey) {
     registerAgentRunContext(runId, {

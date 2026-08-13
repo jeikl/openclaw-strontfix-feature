@@ -1231,6 +1231,8 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     emitAgentEvent({
       runId: params.runId,
       stream: "thinking",
+      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+      ...(params.agentId ? { agentId: params.agentId } : {}),
       data: {
         text: trimmed,
         delta,

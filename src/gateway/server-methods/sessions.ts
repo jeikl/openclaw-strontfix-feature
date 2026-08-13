@@ -2522,7 +2522,18 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     }
     try {
       const { listRunStageCardsForSession } = await import("../../infra/run-stage-store.js");
-      const cards = listRunStageCardsForSession(key);
+      const { listLiveRunStageCardsForSession } = await import("../run-stage-persistence.js");
+      const disk = listRunStageCardsForSession(key);
+      const live = listLiveRunStageCardsForSession(key);
+      // Live in-memory cards win on id (full mid-run stage list).
+      const byId = new Map<string, (typeof disk)[number]>();
+      for (const card of disk) {
+        byId.set(card.id, card);
+      }
+      for (const card of live) {
+        byId.set(card.id, card);
+      }
+      const cards = [...byId.values()].toSorted((a, b) => a.startedAt - b.startedAt);
       respond(true, { sessionKey: key, cards }, undefined);
     } catch (error) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));

@@ -172,7 +172,11 @@ export const handleStopCommand: CommandHandler = async (params, allowTextCommand
   });
 
   const rejectionReason =
-    abortOutcome.active && !abortOutcome.aborted ? ("finalizing" as const) : undefined;
+    abortOutcome.active && !abortOutcome.aborted
+      ? ("finalizing" as const)
+      : !abortOutcome.aborted && stopped <= 0
+        ? ("nothing_to_stop" as const)
+        : undefined;
   return {
     shouldContinue: false,
     reply: { text: formatAbortReplyText(stopped, rejectionReason) },
@@ -198,7 +202,11 @@ export const handleAbortTrigger: CommandHandler = async (params, allowTextComman
   });
   const abortOutcome = await applyAbortTarget(buildAbortTargetApplyParams(params, abortTarget));
   const rejectionReason =
-    abortOutcome.active && !abortOutcome.aborted ? ("finalizing" as const) : undefined;
+    abortOutcome.active && !abortOutcome.aborted
+      ? ("finalizing" as const)
+      : !abortOutcome.aborted
+        ? ("nothing_to_stop" as const)
+        : undefined;
   return {
     shouldContinue: false,
     reply: { text: formatAbortReplyText(undefined, rejectionReason) },

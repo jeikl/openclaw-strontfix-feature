@@ -82,6 +82,7 @@ const LOCAL_COMMANDS = new Set([
   "help",
   "new",
   "reset",
+  "clear",
   "stop",
   "compact",
   "model",

@@ -772,5 +772,7 @@ export type SessionSystemPromptReport = {
   };
 };
 
+// /clear is handled via performGatewaySessionReset (same as WebUI sessions.reset),
+// not the lightweight isNewSession trigger path used by /new and /reset.
 export const DEFAULT_RESET_TRIGGERS = ["/new", "/reset"];
 export const DEFAULT_IDLE_MINUTES = 0;

@@ -122,6 +122,56 @@ export function listRunStageCardsForSession(
   return readSessionFile(key, env).cards.slice();
 }
 
+/** Merge two cards for the same id — never let a sparse late write erase stages. */
+function mergeRunStageCardRecords(
+  prev: RunStageCardRecord,
+  next: RunStageCardRecord,
+): RunStageCardRecord {
+  const prevStages = Array.isArray(prev.stages) ? prev.stages : [];
+  const nextStages = Array.isArray(next.stages) ? next.stages : [];
+  // Prefer the longer stage list; if equal length, prefer the newer payload.
+  const stages =
+    nextStages.length > prevStages.length
+      ? nextStages
+      : nextStages.length < prevStages.length
+        ? prevStages
+        : nextStages.length > 0
+          ? nextStages
+          : prevStages;
+  const prevSegs = Array.isArray(prev.thinkingSegments) ? prev.thinkingSegments : [];
+  const nextSegs = Array.isArray(next.thinkingSegments) ? next.thinkingSegments : [];
+  const thinkingSegments =
+    nextSegs.length > prevSegs.length
+      ? nextSegs
+      : nextSegs.length < prevSegs.length
+        ? prevSegs
+        : nextSegs.length > 0
+          ? nextSegs
+          : prevSegs;
+  const prevThink = prev.thinkingText?.trim() ?? "";
+  const nextThink = next.thinkingText?.trim() ?? "";
+  const thinkingText =
+    nextThink.length >= prevThink.length
+      ? (next.thinkingText ?? null)
+      : (prev.thinkingText ?? null);
+  return {
+    ...prev,
+    ...next,
+    stages,
+    thinkingSegments,
+    thinkingText,
+    thinkingDurationMs:
+      next.thinkingDurationMs != null &&
+      (prev.thinkingDurationMs == null || next.thinkingDurationMs >= prev.thinkingDurationMs)
+        ? next.thinkingDurationMs
+        : (prev.thinkingDurationMs ?? next.thinkingDurationMs ?? null),
+    startedAt: Math.min(prev.startedAt || next.startedAt, next.startedAt || prev.startedAt),
+    // Prefer an explicit end; do not clear a previous endedAt with null.
+    endedAt: next.endedAt ?? prev.endedAt ?? null,
+    runId: next.runId ?? prev.runId ?? null,
+  };
+}
+
 /** Upsert one card for a session. */
 export function saveRunStageCardToStore(
   card: RunStageCardRecord,
@@ -137,7 +187,7 @@ export function saveRunStageCardToStore(
   const file = readSessionFile(key, env);
   const idx = file.cards.findIndex((c) => c.id === card.id);
   if (idx >= 0) {
-    file.cards[idx] = card;
+    file.cards[idx] = mergeRunStageCardRecords(file.cards[idx]!, card);
   } else {
     file.cards.push(card);
   }
@@ -162,4 +212,28 @@ export function replaceRunStageCardsForSession(
     },
     env,
   );
+}
+
+/** Drop all diagnosis cards for a session (session reset / /clear). */
+export function clearRunStageCardsForSession(
+  sessionKey: string,
+  env: NodeJS.ProcessEnv = process.env,
+): void {
+  const key = sessionKey.trim();
+  if (!key) {
+    return;
+  }
+  const filePath = sessionFilePath(key, env);
+  try {
+    fs.unlinkSync(filePath);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") {
+      // Best-effort cleanup; reset must not fail if the stage store is missing.
+      try {
+        writeSessionFile({ sessionKey: key, updatedAt: Date.now(), cards: [] }, env);
+      } catch {
+        // ignore
+      }
+    }
+  }
 }

@@ -3473,6 +3473,90 @@ describe("agent event handler", () => {
     );
   });
 
+  it("broadcasts run_stage/thinking diagnosis cards globally for hidden channel runs", () => {
+    const { broadcast, broadcastToConnIds, chatRunState, handler, sessionMessageSubscribers } =
+      createHarness();
+    // No session message subscribers — diagnosis cards must still reach Control UI.
+    sessionMessageSubscribers.subscribe("conn-other", "session-other");
+    chatRunState.registry.add("run-hidden-dingtalk", {
+      sessionKey: "session-dingtalk",
+      clientRunId: "client-hidden-dingtalk",
+    });
+    registerAgentRunContext("run-hidden-dingtalk", {
+      sessionKey: "session-dingtalk",
+      isControlUiVisible: false,
+    });
+
+    handler({
+      runId: "run-hidden-dingtalk",
+      seq: 1,
+      stream: "run_stage",
+      ts: Date.now(),
+      sessionKey: "session-dingtalk",
+      data: { stage: "model_first", label: "等待模型首包", phase: "start" },
+    });
+    handler({
+      runId: "run-hidden-dingtalk",
+      seq: 2,
+      stream: "thinking",
+      ts: Date.now(),
+      sessionKey: "session-dingtalk",
+      data: { text: "reasons", delta: "reasons" },
+    });
+
+    const globalAgent = agentBroadcastCalls(broadcast);
+    expect(globalAgent.map((call) => (call[1] as { stream?: string }).stream)).toEqual([
+      "run_stage",
+      "thinking",
+    ]);
+    expect(globalAgent[0]?.[1]).toEqual(
+      expect.objectContaining({
+        stream: "run_stage",
+        sessionKey: "session-dingtalk",
+      }),
+    );
+    expect(globalAgent[1]?.[1]).toEqual(
+      expect.objectContaining({
+        stream: "thinking",
+        sessionKey: "session-dingtalk",
+      }),
+    );
+    // Assistant/tool stay session-scoped; diagnosis cards use global agent bus.
+    const agentCalls = broadcastToConnIds.mock.calls.filter(([event]) => event === "agent");
+    expect(agentCalls).toHaveLength(0);
+  });
+
+  it("still stamps sessionKey on hidden channel run_stage cards without subscribers", () => {
+    const { broadcast, broadcastToConnIds, chatRunState, handler } = createHarness();
+    chatRunState.registry.add("run-hidden-unwatched", {
+      sessionKey: "session-dingtalk",
+      clientRunId: "client-hidden-unwatched",
+    });
+    registerAgentRunContext("run-hidden-unwatched", {
+      sessionKey: "session-dingtalk",
+      isControlUiVisible: false,
+    });
+
+    handler({
+      runId: "run-hidden-unwatched",
+      seq: 1,
+      stream: "run_stage",
+      ts: Date.now(),
+      sessionKey: "session-dingtalk",
+      data: { stage: "tool", label: "工具执行", phase: "start" },
+    });
+
+    const globalAgent = agentBroadcastCalls(broadcast);
+    expect(globalAgent).toHaveLength(1);
+    expect(globalAgent[0]?.[1]).toEqual(
+      expect.objectContaining({
+        stream: "run_stage",
+        sessionKey: "session-dingtalk",
+      }),
+    );
+    expect(broadcastToConnIds.mock.calls.filter(([event]) => event === "agent")).toHaveLength(0);
+  });
+
   it("routes hidden bare global chat events to the configured default agent subscriber", () => {
     vi.mocked(getRuntimeConfig).mockReturnValue({
       agents: { list: [{ id: "main" }, { id: "ops", default: true }] },

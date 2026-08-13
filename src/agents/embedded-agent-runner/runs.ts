@@ -373,6 +373,48 @@ export function isEmbeddedAgentRunAbortableForRunId(runId: string): boolean {
   return handle ? isEmbeddedRunHandleAbortable(normalizedRunId, handle) : true;
 }
 
+/**
+ * Abort an embedded/channel agent run by engine runId (or sessionId fallback).
+ * Channel ingress runs are often not registered on chatAbortControllers, so
+ * Control UI Stop must reach this path via chat.abort fallbacks.
+ */
+export function abortEmbeddedAgentRunByRunId(runId: string): boolean {
+  const normalizedRunId = runId.trim();
+  if (!normalizedRunId) {
+    return false;
+  }
+  const handle = ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.get(normalizedRunId);
+  if (handle) {
+    if (!isEmbeddedRunHandleAbortable(normalizedRunId, handle)) {
+      diag.debug(`abort by runId failed: runId=${normalizedRunId} reason=not_abortable`);
+      return false;
+    }
+    for (const [sessionId, active] of ACTIVE_EMBEDDED_RUNS) {
+      if (active === handle || active.runId === normalizedRunId) {
+        diag.debug(`aborting run by runId: runId=${normalizedRunId} sessionId=${sessionId}`);
+        try {
+          active.abort();
+          return true;
+        } catch (err) {
+          diag.warn(
+            `abort by runId failed: runId=${normalizedRunId} sessionId=${sessionId} err=${String(err)}`,
+          );
+          return false;
+        }
+      }
+    }
+    try {
+      handle.abort();
+      return true;
+    } catch (err) {
+      diag.warn(`abort by runId failed: runId=${normalizedRunId} err=${String(err)}`);
+      return false;
+    }
+  }
+  // Some callers pass sessionId where a runId was expected.
+  return abortEmbeddedAgentRun(normalizedRunId);
+}
+
 export function clearEmbeddedAgentRunAbortabilityForRunId(runId: string): void {
   const normalizedRunId = runId.trim();
   if (normalizedRunId) {
@@ -873,6 +915,15 @@ export function forceClearEmbeddedAgentRun(
   let cleared = false;
   const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
   if (handle) {
+    // Always signal abort before dropping the registration so in-flight model
+    // / tool work stops, not just the bookkeeping maps.
+    try {
+      handle.abort(reason === "restart" ? ("restart" as const) : undefined);
+    } catch (err) {
+      diag.warn(
+        `force-clear abort failed: sessionId=${sessionId} reason=${reason} err=${String(err)}`,
+      );
+    }
     ACTIVE_EMBEDDED_RUNS.delete(sessionId);
     clearEmbeddedRunAbortability(handle);
     ACTIVE_EMBEDDED_RUN_SNAPSHOTS.delete(sessionId);

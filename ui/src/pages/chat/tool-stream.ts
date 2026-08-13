@@ -66,6 +66,11 @@ type ToolStreamHost = {
   chatStreamStartedAt: number | null;
   /** Live model reasoning/thinking stream (Control UI only; not channel delivery). */
   chatThinkingStream?: string | null;
+  /**
+   * Run ids the user (or phantom cleanup) already stopped. Late agent events
+   * from those runs must not re-adopt chatRunId or resurrect "思考中".
+   */
+  chatAbortedRunIds?: Set<string>;
   /** High-latency run stages with wall-clock timing (Control UI only). */
   chatRunStages?: ChatRunStageEntry[];
   chatStreamSegments: ChatStreamSegment[];
@@ -356,6 +361,103 @@ function upsertRunStage(host: ToolStreamHost, entry: ChatRunStageEntry): void {
   persistLiveRunStageCard(host, stages);
 }
 
+type RunStageHostFields = ToolStreamHost & {
+  chatRunStageCardId?: string | null;
+  chatRunStageCards?: ChatRunStageCard[];
+  chatThinkingStream?: string | null;
+  chatThinkingStreamBase?: string | null;
+  chatThinkingNewRoundPending?: boolean;
+};
+
+/**
+ * Seal the current live diagnosis card (if any) so the next agent runId starts
+ * a fresh card. Multi-round tool loops share one runId and stay on one card;
+ * a new channel/webchat turn always gets a new runId.
+ */
+function sealLiveRunStageCard(host: ToolStreamHost, endedAt = Date.now()): void {
+  const hostAny = host as RunStageHostFields;
+  const stages = Array.isArray(host.chatRunStages) ? host.chatRunStages : [];
+  if (!hostAny.chatRunStageCardId || stages.length === 0) {
+    return;
+  }
+  const sealedStages = stages.map((s) =>
+    s.active
+      ? {
+          ...s,
+          active: false,
+          endedAt: s.endedAt ?? endedAt,
+          durationMs: s.durationMs ?? Math.max(0, endedAt - s.startedAt),
+        }
+      : s,
+  );
+  host.chatRunStages = sealedStages;
+  // Force-complete: persistLiveRunStageCard only seals when a reply stage finished.
+  // Channel turns that abort mid-stage still need a closed history card.
+  try {
+    const cardId = hostAny.chatRunStageCardId;
+    const prevCard = (hostAny.chatRunStageCards ?? []).find((c) => c.id === cardId);
+    const thinkingSegments = sealOpenThinkingSegments(prevCard?.thinkingSegments?.slice() ?? []);
+    const totalThinkingMs = thinkingSegments.reduce((sum, s) => sum + (s.durationMs ?? 0), 0);
+    const startedAt =
+      sealedStages.length > 0
+        ? sealedStages.reduce((min, s) => Math.min(min, s.startedAt), sealedStages[0].startedAt)
+        : endedAt;
+    const card: ChatRunStageCard = {
+      id: cardId,
+      sessionKey: hostAny.sessionKey,
+      runId: hostAny.chatRunId ?? null,
+      startedAt,
+      endedAt,
+      stages: sealedStages.map((s) => ({ ...s })),
+      thinkingText:
+        joinThinkingSegmentsForDisplay(thinkingSegments) ||
+        hostAny.chatThinkingStream?.trim() ||
+        prevCard?.thinkingText ||
+        null,
+      thinkingDurationMs:
+        totalThinkingMs > 0 ? totalThinkingMs : (prevCard?.thinkingDurationMs ?? null),
+      thinkingSegments,
+    };
+    const client = (host as { client?: import("../../api/gateway.ts").GatewayBrowserClient | null })
+      .client;
+    saveRunStageCardEverywhere(card, client);
+    const prev = Array.isArray(hostAny.chatRunStageCards) ? hostAny.chatRunStageCards : [];
+    hostAny.chatRunStageCards = [...prev.filter((c) => c.id !== card.id), card];
+  } catch {
+    // ignore
+  }
+}
+
+/**
+ * Adopt a new agent runId for diagnosis cards. Same runId keeps accumulating
+ * rounds; a different runId finalizes the previous card and opens a new one.
+ */
+function adoptRunStageTurn(host: ToolStreamHost, runId: string): boolean {
+  if (!runId) {
+    return false;
+  }
+  if (host.chatRunId === runId) {
+    return false;
+  }
+  const hostAny = host as RunStageHostFields;
+  // Prefer reusing the card that already belongs to this runId (history hydrate /
+  // page refresh mid-turn). Never steal another turn's open card.
+  const matching = (hostAny.chatRunStageCards ?? []).find((c) => c.runId === runId);
+  if (host.chatRunId && host.chatRunId !== runId) {
+    sealLiveRunStageCard(host);
+  }
+  host.chatRunId = runId;
+  host.chatRunStages = matching?.stages?.length ? matching.stages.map((s) => ({ ...s })) : [];
+  hostAny.chatRunStageCardId = matching?.id ?? createRunStageCardId(runId);
+  hostAny.chatThinkingStream = matching?.thinkingText ?? null;
+  hostAny.chatThinkingStreamBase = "";
+  hostAny.chatThinkingNewRoundPending = false;
+  if (matching?.thinkingSegments?.length) {
+    // Keep segments; next thinking burst may append.
+  }
+  return true;
+}
+
 /** UI-only: mirror live stages + multi-round thinking into localStorage cards. */
 function persistLiveRunStageCard(
   host: ToolStreamHost,
@@ -436,32 +538,13 @@ function persistLiveRunStageCard(
 }
 
 function handleRunStageEvent(host: ToolStreamHost, payload: AgentEventPayload): void {
-  const hostAny = host as ToolStreamHost & {
-    chatRunStageCardId?: string | null;
-    chatRunStageCards?: ChatRunStageCard[];
-  };
-  if (payload.runId && payload.runId !== host.chatRunId) {
-    host.chatRunId = payload.runId;
-    // Do not change chatRunStageCardId or clear chatRunStages here.
-    // We want to accumulate ALL rounds for this turn onto the SAME card.
-    if (!hostAny.chatRunStageCardId) {
-      // Check if there is an in-flight card from chatRunStageCards (e.g. loaded from gateway after page refresh)
-      const existing = (hostAny.chatRunStageCards ?? []).find(
-        (c) => c.endedAt == null || c.stages.some((s) => s.active),
-      );
-      if (existing) {
-        hostAny.chatRunStageCardId = existing.id;
-        if (host.chatRunStages.length === 0 && existing.stages.length > 0) {
-          host.chatRunStages = existing.stages.map((s) => ({ ...s }));
-        }
-      } else {
-        hostAny.chatRunStageCardId = createRunStageCardId(payload.runId);
-      }
-    }
+  const hostAny = host as RunStageHostFields;
+  if (payload.runId) {
+    adoptRunStageTurn(host, payload.runId);
   }
   if (host.chatRunStages.length === 0 && hostAny.chatRunStageCardId) {
     const existing = (hostAny.chatRunStageCards ?? []).find(
-      (c) => c.id === hostAny.chatRunStageCardId,
+      (c) => c.id === hostAny.chatRunStageCardId && (!payload.runId || c.runId === payload.runId),
     );
     if (existing?.stages?.length) {
       host.chatRunStages = existing.stages.map((s) => ({ ...s }));
@@ -932,15 +1015,54 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
     return;
   }
 
+  const abortedRunIds = host.chatAbortedRunIds;
+  const isAbortedRun =
+    Boolean(payload.runId) && abortedRunIds instanceof Set && abortedRunIds.has(payload.runId);
+
   // Handle compaction events
   if (payload.stream === "compaction") {
+    if (isAbortedRun) {
+      return;
+    }
     handleCompactionEvent(host as CompactionHost, payload);
     return;
   }
 
   if (payload.stream === "lifecycle") {
+    const phase = typeof payload.data?.phase === "string" ? payload.data.phase : "";
+    if (payload.runId && (phase === "start" || phase === "end" || phase === "error")) {
+      // start: adopt run so subsequent stages bind to this turn
+      // end/error: seal after handlers so compaction/fallback still see run id
+      if (phase === "start") {
+        // A genuine new lifecycle start supersedes prior abort suppression.
+        abortedRunIds?.delete(payload.runId);
+        adoptRunStageTurn(host, payload.runId);
+      }
+    }
+    if (isAbortedRun && phase !== "end" && phase !== "error") {
+      return;
+    }
     handleLifecycleCompactionEvent(host as CompactionHost, payload);
     handleLifecycleFallbackEvent(host as CompactionHost, payload);
+    if (phase === "end" || phase === "error") {
+      sealLiveRunStageCard(host, typeof payload.ts === "number" ? payload.ts : Date.now());
+      const hostAny = host as RunStageHostFields;
+      hostAny.chatRunStageCardId = null;
+      host.chatRunStages = [];
+      hostAny.chatThinkingStream = null;
+      hostAny.chatThinkingStreamBase = "";
+      hostAny.chatThinkingNewRoundPending = false;
+      if (payload.runId) {
+        host.chatAbortedRunIds ??= new Set();
+        host.chatAbortedRunIds.add(payload.runId);
+      }
+    }
+    return;
+  }
+
+  if (isAbortedRun) {
+    // Drop late thinking/tool/stage events after Stop so the composer does not
+    // flip back to "思考中" or re-show a live Stop target.
     return;
   }
 
@@ -953,30 +1075,14 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
     return;
   }
 
-  // Detect runId changes early for all streams so we can clear live buffers if a new run starts.
-  if (payload.runId && payload.runId !== host.chatRunId) {
-    if (
-      payload.stream === "thinking" ||
-      payload.stream === "run_stage" ||
-      payload.stream === "tool"
-    ) {
-      const hostAny = host as ToolStreamHost & {
-        chatThinkingStream?: string | null;
-        chatThinkingStreamBase?: string | null;
-        chatThinkingNewRoundPending?: boolean;
-        chatRunStageCardId?: string | null;
-        chatRunStageCards?: ChatRunStageCard[];
-      };
-      host.chatRunId = payload.runId;
-      // Do not change chatRunStageCardId or clear chatRunStages here.
-      // We want to accumulate ALL rounds for this turn onto the SAME card.
-      if (!hostAny.chatRunStageCardId) {
-        hostAny.chatRunStageCardId = createRunStageCardId(payload.runId);
-      }
-      hostAny.chatThinkingStream = null;
-      hostAny.chatThinkingStreamBase = "";
-      hostAny.chatThinkingNewRoundPending = false;
-    }
+  // New agent runId = new user turn (channel or webchat). Multi-round tools share
+  // one runId and keep appending to the same card; a different runId must not.
+  if (
+    payload.runId &&
+    payload.runId !== host.chatRunId &&
+    (payload.stream === "thinking" || payload.stream === "run_stage" || payload.stream === "tool")
+  ) {
+    adoptRunStageTurn(host, payload.runId);
   }
 
   // Live reasoning/thinking tokens (WebUI diagnosis only).

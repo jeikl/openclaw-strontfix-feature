@@ -97,9 +97,18 @@ import {
   reconcileChatRunLifecycle,
   reconcileStaleChatRunAfterSessionStatePublication,
 } from "./run-lifecycle.ts";
-import { loadRunStageCardsForSession, loadRunStageCardsFromGateway } from "./run-stage-ui.ts";
+import {
+  applyOpenRunStageCardToHost,
+  clearRunStageCardsForSession,
+  loadRunStageCardsForSession,
+  loadRunStageCardsFromGateway,
+} from "./run-stage-ui.ts";
 import { scheduleChatScroll, handleChatScroll, resetChatScroll } from "./scroll.ts";
-import { cacheChatMessages, readChatMessagesFromCache } from "./session-message-cache.ts";
+import {
+  cacheChatMessages,
+  clearChatMessagesFromCache,
+  readChatMessagesFromCache,
+} from "./session-message-cache.ts";
 import {
   handleAgentEvent,
   handleSessionOperationEvent,
@@ -163,10 +172,14 @@ export type ChatPageHost = ChatHost &
     chatSendTimingsByRun: Map<string, ChatSendTimingEntry>;
     chatStreamSegments: Array<{ text: string; ts: number }>;
     chatThinkingStream: string | null;
+    /** Run ids suppressed after Stop so late agent events do not re-busy the UI. */
+    chatAbortedRunIds: Set<string>;
     chatRunStages: import("./tool-stream.ts").ChatRunStageEntry[];
     /** UI-only stage cards for this session (localStorage); never model context. */
     chatRunStageCards: import("./run-stage-ui.ts").ChatRunStageCard[];
     chatRunStageCardId: string | null;
+    /** Incremented while stages are active so Lit re-renders live elapsed seconds. */
+    chatRunStageTick: number;
     toolStreamById: Map<string, ToolStreamEntry>;
     toolStreamOrder: string[];
     toolStreamSyncTimer: number | null;
@@ -347,17 +360,25 @@ export function resetChatStateForRouteSession(state: ChatPageHost, sessionKey: s
   state.chatVerboseLevel = null;
   state.chatStream = null;
   state.chatThinkingStream = null;
+  state.chatAbortedRunIds = new Set();
   state.chatRunStages = [];
   state.chatRunStageCardId = null;
-  // Load UI-only stage cards: prefer gateway disk store (works for remote browsers),
-  // fall back to localStorage cache. Never model context.
+  state.chatRunStageTick = 0;
+  // Load UI-only stage cards: prefer gateway disk store (works for remote browsers /
+  // private windows with empty localStorage). Never model context.
   state.chatRunStageCards = loadRunStageCardsForSession(sessionKey);
+  applyOpenRunStageCardToHost(state, state.chatRunStageCards);
+  ensureRunStageTicker(state);
   void loadRunStageCardsFromGateway(state.client, sessionKey).then((cards) => {
     if (!areUiSessionKeysEquivalent(state.sessionKey, sessionKey)) {
       return;
     }
+    // Always apply gateway result when non-empty. Empty localStorage (incognito)
+    // must not block remote history after a successful get.
     if (cards.length > 0) {
       state.chatRunStageCards = cards;
+      applyOpenRunStageCardToHost(state, cards);
+      ensureRunStageTicker(state);
       state.requestUpdate?.();
     }
   });
@@ -644,6 +665,21 @@ export async function refreshChat(
   const historyLoad = loadChatHistory(host as unknown as ChatState, {
     startup: opts?.startup === true,
   });
+  // Incognito / remote Control UI: hydrate diagnosis cards from gateway disk
+  // whenever we refresh chat (not only on session switch).
+  void loadRunStageCardsFromGateway(refreshedClient, refreshedSessionKey).then((cards) => {
+    if (
+      !areUiSessionKeysEquivalent(host.sessionKey, refreshedSessionKey) ||
+      host.client !== refreshedClient ||
+      cards.length === 0
+    ) {
+      return;
+    }
+    host.chatRunStageCards = cards;
+    applyOpenRunStageCardToHost(host, cards);
+    ensureRunStageTicker(host);
+    requestUpdate();
+  });
   const historyRefresh = historyLoad.finally(() => {
     if (opts?.scheduleScroll !== false) {
       scheduleChatScroll(host);
@@ -679,6 +715,12 @@ export async function refreshChat(
     });
     if (!runReconciled) {
       reconcileChatRunFromCurrentSessionRow(host, { publishRunStatus: true });
+    }
+    // Sessions list now known: bind open stage cards only if still active, or
+    // finalize orphans left by gateway restart so Stop/next-message unstick.
+    if (Array.isArray(host.chatRunStageCards) && host.chatRunStageCards.length > 0) {
+      applyOpenRunStageCardToHost(host, host.chatRunStageCards);
+      ensureRunStageTicker(host);
     }
   });
   const startupMetadataRefresh =
@@ -816,6 +858,14 @@ function reconcileSessionEvent(state: ChatPageHost, payload: unknown): SessionCh
     state.sessionsResultAgentId = state.sessions.state.agentId;
     state.sessionsError = state.sessions.state.error;
     reconcileStaleChatRunAfterSessionStatePublication(state);
+    // After gateway restart, the UI may still hold a pre-restart chatRunId while
+    // sessions.list reports hasActiveRun=false. Clear that phantom busy state and
+    // finalize orphan open stage cards so Stop / next message are not stuck.
+    reconcileChatRunFromCurrentSessionRow(state, { publishRunStatus: true });
+    if (Array.isArray(state.chatRunStageCards) && state.chatRunStageCards.length > 0) {
+      applyOpenRunStageCardToHost(state, state.chatRunStageCards);
+      ensureRunStageTicker(state);
+    }
   }
   return reconciled;
 }
@@ -859,7 +909,12 @@ function handleSessionMessageEvent(state: ChatPageHost, payload: unknown) {
   if (runIdBeforeApply && matchesChat) {
     const runId = event.clientRunId ?? event.runId ?? runIdBeforeApply;
     state.pendingSessionMessageReloadSessionKey = event.key;
+    // Always refresh transcript so channel user bubbles appear as soon as they
+    // are written — even while the agent run is still active. Stage-card events
+    // often arrive first via the global agent bus; without this reload the live
+    // card anchors to the previous turn until the run finishes.
     if (event.hasActiveRun === true) {
+      void loadChatHistory(state).finally(() => state.requestUpdate?.());
       return;
     }
     if (finishSessionMessageRunReconcile(state, event.key, runId, result.row)) {
@@ -920,6 +975,41 @@ function handleSessionsChangedEvent(state: ChatPageHost, payload: unknown) {
     state.selectedChatSessionArchived = event.archived;
   }
   const result = reconcileSessionEvent(state, payload);
+  // Channel /clear and sessions.reset emit reason "new" | "reset". Refresh the
+  // open chat and drop diagnosis cards so WebUI matches the cleared transcript.
+  if (
+    event &&
+    (event.reason === "new" || event.reason === "reset") &&
+    globalSessionEventMatchesChat(state, event) &&
+    sessionMessageMatchesChat(state, event)
+  ) {
+    clearRunStageCardsForSession(state.sessionKey);
+    state.chatRunStageCards = [];
+    state.chatRunStages = [];
+    state.chatRunStageCardId = null;
+    state.chatThinkingStream = null;
+    state.chatMessages = [];
+    if (state.chatMessagesBySession) {
+      clearChatMessagesFromCache(state.chatMessagesBySession, state, {
+        sessionKey: state.sessionKey,
+      });
+    }
+    reconcileChatRunLifecycle(state, {
+      outcome: runIdBeforeApply ? "interrupted" : undefined,
+      sessionStatus: "killed",
+      runId: runIdBeforeApply,
+      sessionKey: state.sessionKey,
+      clearLocalRun: true,
+      clearChatStream: true,
+      clearToolStream: true,
+      clearSideResultTerminalRuns: true,
+      clearRunStatus: true,
+    });
+    // Paint empty UI immediately, then pull authoritative empty history.
+    state.requestUpdate?.();
+    void loadChatHistory(state as unknown as ChatState).finally(() => state.requestUpdate?.());
+    return;
+  }
   if (
     result.applied &&
     event &&
@@ -1015,9 +1105,11 @@ export function createPageState(
     chatRunId: null,
     chatStream: null,
     chatThinkingStream: null,
+    chatAbortedRunIds: new Set<string>(),
     chatRunStages: [],
     chatRunStageCards: loadRunStageCardsForSession(settings.sessionKey),
     chatRunStageCardId: null,
+    chatRunStageTick: 0,
     chatStreamStartedAt: null,
     lastError: null,
     chatError: null,
@@ -1194,7 +1286,43 @@ export function handlePageGatewayEvent(state: ChatPageHost, event: GatewayEventF
     return;
   }
   if (event.event === "agent" || event.event === "session.tool") {
+    const payload = event.payload as {
+      stream?: string;
+      runId?: string;
+      data?: { phase?: string; stage?: string };
+    } | null;
+    const prevRunId = state.chatRunId;
     handleAgentEvent(state as never, event.payload as never);
+    // Channel turns deliver run_stage/lifecycle before transcript refresh, so the
+    // live card would otherwise anchor to the previous user bubble. Pull history
+    // as soon as a new agent run starts so the inbound user message appears first.
+    const isNewTurnStart =
+      Boolean(payload?.runId) &&
+      payload?.runId !== prevRunId &&
+      ((payload?.stream === "lifecycle" && payload?.data?.phase === "start") ||
+        (payload?.stream === "run_stage" &&
+          payload?.data?.phase === "start" &&
+          (payload?.data?.stage === "startup" || payload?.data?.stage === "prompt")));
+    if (isNewTurnStart) {
+      const turnSessionKey = state.sessionKey;
+      void loadChatHistory(state as unknown as ChatState).finally(() => requestPageUpdate(state));
+      // Also re-pull server-persisted cards (incognito / late join mid-history).
+      void loadRunStageCardsFromGateway(state.client, turnSessionKey).then((cards) => {
+        if (!areUiSessionKeysEquivalent(state.sessionKey, turnSessionKey) || cards.length === 0) {
+          return;
+        }
+        // Merge by id: keep any live-in-progress card, replace completed history.
+        const liveId = state.chatRunStageCardId;
+        const byId = new Map(cards.map((c) => [c.id, c]));
+        for (const c of state.chatRunStageCards ?? []) {
+          if (liveId && c.id === liveId && c.endedAt == null) {
+            byId.set(c.id, c);
+          }
+        }
+        state.chatRunStageCards = [...byId.values()].sort((a, b) => a.startedAt - b.startedAt);
+        requestPageUpdate(state);
+      });
+    }
     requestPageUpdate(state);
     ensureRunStageTicker(state);
     return;
@@ -1225,7 +1353,7 @@ function requestPageUpdate(state: ChatPageHost) {
 
 const runStageTickerByState = new WeakMap<object, number>();
 
-/** Refresh active stage timers once per second while a run is in progress. */
+/** Refresh active stage timers while a run is in progress (sub-second wall clock). */
 function ensureRunStageTicker(state: ChatPageHost) {
   const stages = state.chatRunStages;
   const hasActive = Array.isArray(stages) && stages.some((s) => s.active);
@@ -1240,6 +1368,7 @@ function ensureRunStageTicker(state: ChatPageHost) {
   if (existing != null) {
     return;
   }
+  // 100ms so 0.1s precision visibly advances during long waits (model_first etc.).
   const timer = globalThis.setInterval(() => {
     const current = state.chatRunStages;
     if (!Array.isArray(current) || !current.some((s) => s.active)) {
@@ -1247,10 +1376,11 @@ function ensureRunStageTicker(state: ChatPageHost) {
       runStageTickerByState.delete(state);
       return;
     }
-    // Force a shallow copy so Lit re-renders elapsed seconds.
-    state.chatRunStages = current.map((s) => ({ ...s }));
+    // chat-thread memoizes via guard(JSON.stringify(runStages)); stages fields are
+    // stable while active, so bump an explicit tick to force re-render of elapsed ms.
+    state.chatRunStageTick = (state.chatRunStageTick ?? 0) + 1;
     requestPageUpdate(state);
-  }, 250) as unknown as number;
+  }, 100) as unknown as number;
   runStageTickerByState.set(state, timer);
 }
 

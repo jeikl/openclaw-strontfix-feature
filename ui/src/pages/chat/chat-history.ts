@@ -50,6 +50,7 @@ import {
   roundedControlUiDurationMs,
 } from "./performance.ts";
 import { reconcileChatRunLifecycle } from "./run-lifecycle.ts";
+import { clearRunStageCardsForSession, loadRunStageCardsFromGateway } from "./run-stage-ui.ts";
 import { scheduleChatScroll } from "./scroll.ts";
 import {
   cacheChatMessages,
@@ -597,6 +598,14 @@ export async function syncSelectedSessionMessageSubscription(
   if (!nextKey) {
     return;
   }
+  // force=true means the gateway connection (or local subscription markers)
+  // was reset. Drop cached keys first so we always re-issue
+  // sessions.messages.subscribe for the currently selected session.
+  if (opts?.force === true) {
+    state.chatSessionMessageSubscriptionKey = null;
+    state.chatSessionMessageSubscriptionRequestedKey = null;
+    state.chatSessionMessageSubscriptionAgentId = null;
+  }
   const generation = beginSelectedSessionMessageSubscriptionSync(state);
   const previousRequestedKey = normalizeSubscriptionKey(
     state.chatSessionMessageSubscriptionRequestedKey,
@@ -747,20 +756,35 @@ export async function clearChatHistory(state: ClearChatHistoryState) {
     return;
   }
   const hadActiveRun = hasAbortableChatSessionRun(state);
+  const sessionKey = state.sessionKey;
   try {
-    await state.sessions.reset(
-      state.sessionKey,
-      scopedAgentParamsForSession(state, state.sessionKey),
-    );
+    await state.sessions.reset(sessionKey, scopedAgentParamsForSession(state, sessionKey));
     state.chatMessages = [];
-    clearCachedChatMessagesForSession(state, state.sessionKey);
+    clearCachedChatMessagesForSession(state, sessionKey);
     state.chatSideResult = null;
     state.chatReplyTarget = null;
+    // Drop stage/thinking diagnosis UI for this session (localStorage + live buffers).
+    clearRunStageCardsForSession(sessionKey);
+    const hostAny = state as ClearChatHistoryState & {
+      chatRunStageCards?: unknown[];
+      chatRunStages?: unknown[];
+      chatRunStageCardId?: string | null;
+      chatThinkingStream?: string | null;
+      chatAbortedRunIds?: Set<string>;
+    };
+    if (hostAny.chatRunId) {
+      hostAny.chatAbortedRunIds ??= new Set();
+      hostAny.chatAbortedRunIds.add(hostAny.chatRunId);
+    }
+    hostAny.chatRunStageCards = [];
+    hostAny.chatRunStages = [];
+    hostAny.chatRunStageCardId = null;
+    hostAny.chatThinkingStream = null;
     reconcileChatRunLifecycle(state, {
       outcome: hadActiveRun ? "interrupted" : undefined,
       sessionStatus: "killed",
       runId: state.chatRunId,
-      sessionKey: state.sessionKey,
+      sessionKey,
       clearLocalRun: true,
       clearChatStream: true,
       clearToolStream: true,
@@ -768,6 +792,14 @@ export async function clearChatHistory(state: ClearChatHistoryState) {
       clearRunStatus: !hadActiveRun,
     });
     await loadChatHistory(state);
+    // Gateway store is cleared by sessions.reset; re-sync empty cards for remote browsers.
+    void loadRunStageCardsFromGateway(state.client, sessionKey).then((cards) => {
+      if (state.sessionKey !== sessionKey) {
+        return;
+      }
+      hostAny.chatRunStageCards = cards;
+      state.requestUpdate?.();
+    });
   } catch (err) {
     setChatError(state, String(err));
   }

@@ -670,6 +670,12 @@ class ChatPane extends LitElement {
         markQueuedChatSendsWaitingForReconnect(state);
       }
       this.connectedClient = null;
+      // Gateway clears session-message recipients on disconnect. Drop local
+      // subscription markers so the next connect always re-subscribes (same
+      // client object is often reused across reconnects).
+      state.chatSessionMessageSubscriptionKey = null;
+      state.chatSessionMessageSubscriptionRequestedKey = null;
+      state.chatSessionMessageSubscriptionAgentId = null;
       state.realtimeTalkSession?.stop();
       state.realtimeTalkSession = null;
       state.realtimeTalkActive = false;
@@ -678,7 +684,11 @@ class ChatPane extends LitElement {
       state.requestUpdate?.();
       return;
     }
-    if (clientChanged && snapshot.client) {
+    // Reconnect may keep the same GatewayBrowserClient instance. Treat
+    // false→true connected transitions like a client change so channel-session
+    // stage/thinking cards keep flowing after WS drop (code 1001/1012).
+    const reconnected = !wasConnected && snapshot.connected && Boolean(snapshot.client);
+    if ((clientChanged || reconnected) && snapshot.client) {
       const startupClient = snapshot.client;
       const startupGeneration = ++this.connectionGeneration;
       const startupSessionKey = state.sessionKey;
@@ -708,6 +718,10 @@ class ChatPane extends LitElement {
         }
       };
       this.connectedClient = startupClient;
+      // Clear first so force-subscribe cannot short-circuit on stale keys.
+      state.chatSessionMessageSubscriptionKey = null;
+      state.chatSessionMessageSubscriptionRequestedKey = null;
+      state.chatSessionMessageSubscriptionAgentId = null;
       void syncSelectedSessionMessageSubscription(state, { force: true });
       void retryReconnectableQueuedChatSends(state);
       void refreshPageChat(state, { startup: true, awaitHistory: true }).finally(() => {
@@ -849,6 +863,7 @@ class ChatPane extends LitElement {
       runStageCards: state.chatRunStageCards,
       chatRunId: state.chatRunId,
       chatRunStageCardId: state.chatRunStageCardId,
+      runStageTick: state.chatRunStageTick,
       streamStartedAt: state.chatStreamStartedAt,
       assistantAvatarUrl: resolveChatAvatarUrl(state),
       sendShortcut: state.settings.chatSendShortcut,

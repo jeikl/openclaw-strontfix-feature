@@ -449,12 +449,14 @@ function enrichAgentEvent(
   const eventSessionKey =
     typeof event.sessionKey === "string" && event.sessionKey.trim() ? event.sessionKey : undefined;
   // Hidden channel-routed runs should not leak live assistant/tool traffic into
-  // Control UI, but lifecycle events still need the session key so gateway
-  // listeners can persist terminal session state even if run-context lookup is
-  // unavailable by the time the terminal event arrives. Terminal failures are
-  // emitted on the lifecycle stream with `phase: "error"`; the separate error
-  // stream remains redacted for hidden runs because it is observational only.
-  const preserveSessionKey = isControlUiVisible || event.stream === "lifecycle";
+  // Control UI, but lifecycle still needs the session key for terminal persistence,
+  // and run_stage/thinking need it so the gateway can mirror diagnosis cards to the
+  // WebUI session that is actively viewing that channel session.
+  const preserveSessionKey =
+    isControlUiVisible ||
+    event.stream === "lifecycle" ||
+    event.stream === "run_stage" ||
+    event.stream === "thinking";
   const sessionKey = preserveSessionKey ? (eventSessionKey ?? context?.sessionKey) : undefined;
   // Stamp lifecycle events with the owning sessionId (see AgentEventPayload) at
   // emit time, since the run context can be cleared before the terminal persists.

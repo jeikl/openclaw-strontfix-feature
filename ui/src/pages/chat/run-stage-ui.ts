@@ -8,6 +8,7 @@
 import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import { renderThinkingPanel } from "./components/chat-message.ts";
 import type { ChatRunStageEntry } from "./tool-stream.ts";
@@ -92,7 +93,10 @@ export async function loadRunStageCardsFromGateway(
   sessionKey: string,
 ): Promise<ChatRunStageCard[]> {
   const key = sessionKey.trim();
-  if (!client || !key) {
+  if (!key) {
+    return [];
+  }
+  if (!client) {
     return loadRunStageCardsForSession(key);
   }
   try {
@@ -113,6 +117,128 @@ export async function loadRunStageCardsFromGateway(
   } catch {
     return loadRunStageCardsForSession(key);
   }
+}
+
+type OpenStageHost = {
+  sessionKey?: string;
+  chatRunId?: string | null;
+  chatSending?: boolean;
+  chatRunStages?: ChatRunStageEntry[];
+  chatRunStageCardId?: string | null;
+  chatThinkingStream?: string | null;
+  chatRunStageCards?: ChatRunStageCard[];
+  sessionsResult?: {
+    sessions?: Array<{
+      key?: string;
+      hasActiveRun?: boolean;
+      activeRunIds?: string[];
+      status?: string;
+    }>;
+  } | null;
+};
+
+/**
+ * True when gateway session rows still claim this run (or any run) is active.
+ * After a gateway restart open stage cards may still exist on disk while no
+ * run is registered — those must not rebind chatRunId or the UI gets stuck
+ * on Stop ("Nothing to stop") and blocks the next message.
+ */
+export function isOpenStageRunActiveOnHost(
+  host: OpenStageHost,
+  runId: string | null | undefined,
+): boolean {
+  const normalizedRunId = typeof runId === "string" ? runId.trim() : "";
+  const sessions = host.sessionsResult?.sessions;
+  if (!Array.isArray(sessions) || sessions.length === 0) {
+    // Sessions list not loaded yet: do not resurrect a busy run from disk.
+    // Live agent events will set chatRunId if the turn is still running.
+    return false;
+  }
+  const sessionKey = host.sessionKey?.trim() ?? "";
+  for (const row of sessions) {
+    const rowKey = typeof row.key === "string" ? row.key.trim() : "";
+    if (!rowKey) {
+      continue;
+    }
+    if (sessionKey && !areUiSessionKeysEquivalent(rowKey, sessionKey)) {
+      continue;
+    }
+    if (row.hasActiveRun === false) {
+      return false;
+    }
+    if (row.status && row.status !== "running") {
+      return false;
+    }
+    if (Array.isArray(row.activeRunIds) && row.activeRunIds.length > 0) {
+      if (!normalizedRunId) {
+        return row.hasActiveRun === true;
+      }
+      return row.activeRunIds.includes(normalizedRunId);
+    }
+    if (row.hasActiveRun === true || row.status === "running") {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * After history hydrate: if an open card exists *and* the gateway still reports
+ * that run as active, bind it as the live turn so mid-run re-join continues
+ * from the full stage list. Orphan open cards (gateway restart, crashed turn)
+ * stay in history only — never resurrect chatRunId.
+ */
+export function applyOpenRunStageCardToHost(
+  host: OpenStageHost,
+  cards: ChatRunStageCard[],
+  opts?: { bindAsLive?: boolean | "auto" },
+): ChatRunStageCard | null {
+  const open =
+    cards.find(
+      (c) =>
+        c.endedAt == null &&
+        (c.stages.some((s) => s.active) || (c.stages?.length ?? 0) > 0) &&
+        c.runId,
+    ) ?? null;
+  if (!open?.runId) {
+    return null;
+  }
+  // Do not clobber a newer live run already streaming in this tab.
+  if (host.chatRunId && host.chatRunId !== open.runId && (host.chatRunStages?.length ?? 0) > 0) {
+    return null;
+  }
+  const bindMode = opts?.bindAsLive ?? "auto";
+  const sessionsKnown =
+    Array.isArray(host.sessionsResult?.sessions) && host.sessionsResult.sessions.length > 0;
+  const runActive = isOpenStageRunActiveOnHost(host, open.runId);
+  const shouldBindLive = bindMode === true || (bindMode === "auto" && runActive);
+  if (!shouldBindLive) {
+    // Only finalize when the sessions list is present and confirms the run is
+    // gone. If sessions are not loaded yet, leave the open card untouched so a
+    // mid-run rejoin can still bind once hasActiveRun arrives.
+    if (
+      sessionsKnown &&
+      !runActive &&
+      Array.isArray(host.chatRunStageCards) &&
+      host.chatRunStageCards.length > 0
+    ) {
+      host.chatRunStageCards = host.chatRunStageCards.map((card) =>
+        card.id === open.id || card.endedAt == null ? forceFinalizeOpenCard(card) : card,
+      );
+      const finalized = host.chatRunStageCards.find((c) => c.id === open.id);
+      if (finalized) {
+        saveRunStageCard(finalized);
+      }
+    }
+    return null;
+  }
+  host.chatRunId = open.runId;
+  host.chatRunStageCardId = open.id;
+  host.chatRunStages = open.stages.map((s) => ({ ...s }));
+  host.chatThinkingStream = open.thinkingSegments?.length
+    ? (open.thinkingSegments[open.thinkingSegments.length - 1]?.text ?? open.thinkingText ?? null)
+    : (open.thinkingText ?? null);
+  return open;
 }
 
 /** Best-effort push of one card to the gateway store. */
@@ -147,17 +273,18 @@ function normalizeCard(card: ChatRunStageCard): ChatRunStageCard {
   };
 }
 
-/**
- * Finalize cards that were persisted mid-flight (e.g. before a page refresh).
- * Marks all active stages as done and seals open thinking segments so they
- * render cleanly instead of showing stale in-progress data.
- */
-function finalizeStaleCard(card: ChatRunStageCard): ChatRunStageCard {
-  // Already finalized — nothing to do.
+/** Cards with no end that started this long ago are treated as abandoned. */
+const STALE_OPEN_CARD_MS = 30 * 60 * 1000;
+
+/** Force-close an open card (gateway restart / Stop with no server run). */
+export function forceFinalizeOpenCard(
+  card: ChatRunStageCard,
+  endedAtMs = Date.now(),
+): ChatRunStageCard {
   if (card.endedAt != null && card.stages.every((s) => !s.active)) {
     return card;
   }
-  const now = Date.now();
+  const now = endedAtMs;
   const stages = card.stages.map((s) => ({
     ...s,
     active: false,
@@ -179,6 +306,29 @@ function finalizeStaleCard(card: ChatRunStageCard): ChatRunStageCard {
   };
 }
 
+/**
+ * Finalize cards that were persisted mid-flight and abandoned (e.g. crash).
+ * Open cards for a still-running turn must stay open so re-joining a session
+ * mid-run can hydrate live stages (not restart as "round 1") — but only when
+ * applyOpenRunStageCardToHost also confirms the run is still active.
+ */
+function finalizeStaleCard(card: ChatRunStageCard): ChatRunStageCard {
+  // Already finalized — nothing to do.
+  if (card.endedAt != null && card.stages.every((s) => !s.active)) {
+    return card;
+  }
+  const now = Date.now();
+  const isFreshOpen =
+    card.endedAt == null &&
+    now - (card.startedAt || now) < STALE_OPEN_CARD_MS &&
+    (card.stages.some((s) => s.active) || card.stages.length > 0);
+  // Keep fresh open cards as-is for mid-run hydrate.
+  if (isFreshOpen) {
+    return card;
+  }
+  return forceFinalizeOpenCard(card, now);
+}
+
 export function saveRunStageCard(card: ChatRunStageCard): void {
   const key = card.sessionKey.trim();
   const normalized = normalizeCard(card);
@@ -192,6 +342,19 @@ export function saveRunStageCard(card: ChatRunStageCard): void {
     idx >= 0 ? existing.map((c, i) => (i === idx ? normalized : c)) : [...existing, normalized];
   store.bySession[key] = next.slice(-MAX_CARDS_PER_SESSION);
   writeStore(store);
+}
+
+/** Remove all UI stage/thinking cards for a session (local /clear and remote reset). */
+export function clearRunStageCardsForSession(sessionKey: string): void {
+  const key = sessionKey.trim();
+  if (!key) {
+    return;
+  }
+  const store = readStore();
+  if (store.bySession[key]) {
+    delete store.bySession[key];
+    writeStore(store);
+  }
 }
 
 /** localStorage cache + optional gateway write (remote browsers share server store). */
@@ -234,12 +397,12 @@ export function joinThinkingSegmentsForDisplay(
     .join("\n\n");
 }
 
-function formatStageSeconds(ms: number): string {
+function formatStageSeconds(ms: number, opts?: { live?: boolean }): string {
   if (!Number.isFinite(ms) || ms < 0) {
-    return "0.0s";
+    return opts?.live ? "0.0s" : "0s";
   }
-  // Sub-10s keeps a decimal so live elapsed seconds visibly tick.
-  if (ms < 10_000) {
+  // Live rows always show one decimal so the clock visibly advances every 100ms tick.
+  if (opts?.live || ms < 10_000) {
     return `${(ms / 1000).toFixed(1)}s`;
   }
   const totalSeconds = Math.floor(ms / 1000);
@@ -333,6 +496,7 @@ export function renderRunStagePanel(
   const open = options?.open !== false;
   let totalMs = 0;
   const toneTotals: Partial<Record<StageTone, number>> = {};
+  const anyActive = stages.some((s) => s.active);
   for (const stage of stages) {
     const elapsed = stage.active
       ? Math.max(0, nowMs - stage.startedAt)
@@ -355,7 +519,7 @@ export function renderRunStagePanel(
             (t) => html`<span
               class="agent-chat__run-stage-tone-summary agent-chat__run-stage-tone-summary--${t.tone}"
             >
-              ${t.label} ${formatStageSeconds(t.ms)}
+              ${t.label} ${formatStageSeconds(t.ms, { live: anyActive })}
             </span>`,
           )}
         </span>`
@@ -382,7 +546,11 @@ export function renderRunStagePanel(
           <span class="agent-chat__run-stages-chevron" aria-hidden="true">▸</span>
           ${title}
           <span class="agent-chat__run-stages-count">${stages.length} 步</span>
-          <span class="agent-chat__run-stages-total">${formatStageSeconds(totalMs)}</span>
+          <span class="agent-chat__run-stages-total"
+            >${formatStageSeconds(totalMs, {
+              live: anyActive,
+            })}</span
+          >
           ${toneBreakdown}
         </span>
         <span class="agent-chat__run-stages-hint">点击收起/展开</span>
@@ -426,7 +594,9 @@ export function renderRunStagePanel(
                       <span class="agent-chat__run-stage-tone-tag">${toneTag(tone)}</span>
                       ${stage.label}
                     </span>
-                    <span class="agent-chat__run-stage-time">${formatStageSeconds(elapsedMs)}</span>
+                    <span class="agent-chat__run-stage-time"
+                      >${formatStageSeconds(elapsedMs, { live: stage.active })}</span
+                    >
                   </div>
                 `;
               })}

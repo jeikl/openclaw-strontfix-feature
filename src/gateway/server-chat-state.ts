@@ -78,6 +78,8 @@ export function isChatAbortMarkerCurrent(
 export type BufferedAgentEvent = {
   sessionKey?: string;
   agentId?: string;
+  /** Hidden (channel-routed) runs deliver throttled text only to this session's subscribers. */
+  controlUiVisible?: boolean;
   payload: AgentEventPayload & { spawnedBy?: string };
 };
 

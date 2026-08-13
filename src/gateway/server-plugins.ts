@@ -94,8 +94,13 @@ function getFallbackGatewayContext(): GatewayRequestContext | undefined {
   return resolved ?? fallbackGatewayContextState.context;
 }
 
+/** Resolve the in-process gateway request context (scoped or process fallback). */
+export function resolveInProcessGatewayRequestContext(): GatewayRequestContext | undefined {
+  return getPluginRuntimeGatewayRequestScope()?.context ?? getFallbackGatewayContext();
+}
+
 export function hasInProcessGatewayContext(): boolean {
-  return Boolean(getPluginRuntimeGatewayRequestScope()?.context ?? getFallbackGatewayContext());
+  return Boolean(resolveInProcessGatewayRequestContext());
 }
 
 type PluginSubagentOverridePolicy = {

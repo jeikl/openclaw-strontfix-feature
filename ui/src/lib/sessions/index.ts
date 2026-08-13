@@ -1018,9 +1018,11 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     return result;
   };
 
+  let gatewaySessionSubscribed = false;
   const stopGateway = gateway.subscribe((next) => {
     if (!next.connected || !next.client) {
       subscribedClient = null;
+      gatewaySessionSubscribed = false;
       publish({
         result: null,
         agentId: null,
@@ -1031,14 +1033,21 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       });
       return;
     }
-    if (subscribedClient !== next.client) {
-      const client = next.client;
+    // Reconnect often reuses the same GatewayBrowserClient instance while the
+    // server drops per-connection session subscriptions. Re-issue
+    // sessions.subscribe whenever we regain a live connection.
+    const client = next.client;
+    const clientChanged = subscribedClient !== client;
+    const needsSessionSubscribe = clientChanged || !gatewaySessionSubscribed;
+    if (needsSessionSubscribe) {
       subscribedClient = client;
+      gatewaySessionSubscribed = true;
       void (async () => {
         try {
           await subscribeSessionGateway(client);
         } catch (error) {
           if (!disposed && gateway.snapshot.client === client) {
+            gatewaySessionSubscribed = false;
             publish({ ...state, error: String(error) });
           }
         } finally {

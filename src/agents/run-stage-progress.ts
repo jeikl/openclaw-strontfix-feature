@@ -63,6 +63,7 @@ export function beginRunStage(params: RunStageEmitParams): void {
   }
   const startedAt = Date.now();
   map.set(params.stage, { startedAt });
+  const label = resolveLabel(params.stage, params.detail);
   try {
     emitAgentEvent({
       runId: params.runId,
@@ -72,7 +73,7 @@ export function beginRunStage(params: RunStageEmitParams): void {
       ...(params.sessionId ? { sessionId: params.sessionId } : {}),
       data: {
         stage: params.stage,
-        label: resolveLabel(params.stage, params.detail),
+        label,
         phase: "start",
         startedAt,
       },
@@ -98,6 +99,7 @@ export function endRunStage(params: RunStageEmitParams): number | null {
   }
   const endedAt = Date.now();
   const durationMs = Math.max(0, endedAt - clock.startedAt);
+  const label = resolveLabel(params.stage, params.detail);
   try {
     emitAgentEvent({
       runId: params.runId,
@@ -107,7 +109,7 @@ export function endRunStage(params: RunStageEmitParams): number | null {
       ...(params.sessionId ? { sessionId: params.sessionId } : {}),
       data: {
         stage: params.stage,
-        label: resolveLabel(params.stage, params.detail),
+        label,
         phase: "end",
         startedAt: clock.startedAt,
         endedAt,

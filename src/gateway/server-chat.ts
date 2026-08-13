@@ -1031,9 +1031,8 @@ export function createAgentEventHandler({
     if (!sessionKey) {
       return;
     }
-    const recipients = sessionMessageSubscribers.get(
-      resolveSessionDeliveryKey(sessionKey, opts?.agentId),
-    );
+    const deliveryKey = resolveSessionDeliveryKey(sessionKey, opts?.agentId);
+    const recipients = sessionMessageSubscribers.get(deliveryKey);
     if (recipients.size > 0) {
       broadcastToConnIds("agent", payload, recipients, { dropIfSlow: opts?.dropIfSlow });
     }
@@ -1065,7 +1064,10 @@ export function createAgentEventHandler({
     });
     bufferedEntries.sort((a, b) => a.buffered.payload.seq - b.buffered.payload.seq);
     for (const { key, buffered } of bufferedEntries) {
-      sendAgentPayload(buffered.sessionKey, buffered.payload, { agentId: buffered.agentId });
+      sendAgentPayload(buffered.sessionKey, buffered.payload, {
+        agentId: buffered.agentId,
+        controlUiVisible: buffered.controlUiVisible ?? true,
+      });
       chatRunState.bufferedAgentEvents.delete(key);
       chatRunState.agentDeltaSentAt.set(key, Date.now());
     }
@@ -1104,7 +1106,11 @@ export function createAgentEventHandler({
     sessionKey: string | undefined,
     agentId: string | undefined,
     payload: AgentEventPayload & { spawnedBy?: string },
-  ): BufferedAgentEvent => (sessionKey ? { sessionKey, agentId, payload } : { agentId, payload });
+    controlUiVisible = true,
+  ): BufferedAgentEvent =>
+    sessionKey
+      ? { sessionKey, agentId, controlUiVisible, payload }
+      : { agentId, controlUiVisible, payload };
 
   const mergeBufferedAgentPayload = (
     previous: BufferedAgentEvent,
@@ -1135,17 +1141,18 @@ export function createAgentEventHandler({
     sessionKey: string | undefined,
     agentId: string | undefined,
     payload: AgentEventPayload & { spawnedBy?: string },
+    controlUiVisible = true,
   ) => {
     const stream = resolveAgentTextThrottleStream(payload);
     if (!stream) {
-      sendAgentPayload(sessionKey, payload, { agentId });
+      sendAgentPayload(sessionKey, payload, { agentId, controlUiVisible });
       return;
     }
     const now = Date.now();
     const key = agentTextThrottleKey(clientRunId, stream);
     const last = chatRunState.agentDeltaSentAt.get(key);
     if (last !== undefined && now - last < 150) {
-      const nextBuffered = buildBufferedAgentEvent(sessionKey, agentId, payload);
+      const nextBuffered = buildBufferedAgentEvent(sessionKey, agentId, payload, controlUiVisible);
       const buffered = chatRunState.bufferedAgentEvents.get(key);
       chatRunState.bufferedAgentEvents.set(
         key,
@@ -1154,7 +1161,7 @@ export function createAgentEventHandler({
       return;
     }
     flushBufferedAgentDeltaIfNeeded(clientRunId);
-    sendAgentPayload(sessionKey, payload, { agentId });
+    sendAgentPayload(sessionKey, payload, { agentId, controlUiVisible });
     chatRunState.agentDeltaSentAt.set(key, now);
   };
 
@@ -1247,10 +1254,14 @@ export function createAgentEventHandler({
           ...eventForClients,
           ...(isHeartbeat !== undefined && { isHeartbeat }),
         };
-    const hasSessionMessageSubscribers = sessionKey
-      ? sessionMessageSubscribers.get(resolveSessionDeliveryKey(sessionKey, sessionAgentId)).size >
-        0
-      : false;
+    const deliveryKey = sessionKey
+      ? resolveSessionDeliveryKey(sessionKey, sessionAgentId)
+      : undefined;
+    const sessionSubscriberIds = deliveryKey
+      ? sessionMessageSubscribers.get(deliveryKey)
+      : new Set<string>();
+    const hasSessionMessageSubscribers = sessionSubscriberIds.size > 0;
+    const isCardStream = evt.stream === "run_stage" || evt.stream === "thinking";
     const last = agentRunSeq.get(evt.runId) ?? 0;
     const isToolEvent = evt.stream === "tool";
     const isItemEvent = evt.stream === "item";
@@ -1422,6 +1433,20 @@ export function createAgentEventHandler({
           { ...agentPayload, ...buildSessionEventSnapshot(sessionKey, undefined, sessionAgentId) },
           { agentId: sessionAgentId, controlUiVisible: false, dropIfSlow: true },
         );
+      } else if (!isAborted && sessionKey && isCardStream) {
+        // Channel-routed runs keep assistant/tool off the global bus, but
+        // run_stage/thinking are Control-UI diagnosis only. Always fan them out
+        // on the global agent stream with sessionKey stamped so:
+        //  - operators viewing that session see live cards without relying on
+        //    sessions.messages.subscribe (which drops on WS reconnect);
+        //  - clients not viewing the session filter by sessionKey client-side.
+        // Server-side run-stage persistence already covers offline history.
+        flushBufferedAgentDeltaIfNeeded(clientRunId);
+        sendAgentPayload(sessionKey, agentPayload, {
+          agentId: sessionAgentId,
+          controlUiVisible: true,
+          dropIfSlow: true,
+        });
       }
       if (!isControlUiVisible && isItemEvent && sessionKey && hasSessionMessageSubscribers) {
         sendAgentPayload(

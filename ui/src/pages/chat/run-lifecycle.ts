@@ -175,22 +175,89 @@ export async function abortChatRun(state: ChatAbortRunState): Promise<boolean> {
       ...(runId ? { runId } : {}),
     });
     let aborted = isChatAbortResultSuccessful(abortResult);
+    // Stale client runId (or channel runs not keyed in chatAbortControllers):
+    // fall back to session-scoped abort (gateway also aborts embedded runs).
     if (!aborted && runId) {
       abortResult = await state.client.request("chat.abort", sessionParams);
       aborted = isChatAbortResultSuccessful(abortResult);
     }
+    // Last resort for channel sessions: sessions.abort uses the same path and
+    // returns a clearer status payload for operators.
     if (!aborted) {
-      setChatError(
-        state,
-        "Nothing to stop — the run may already be finishing or no longer active.",
-      );
-      return false;
+      try {
+        const sessionAbort = await state.client.request<{
+          ok?: boolean;
+          abortedRunId?: string | null;
+          status?: string;
+        }>("sessions.abort", {
+          key: state.sessionKey,
+          ...(runId ? { runId } : {}),
+          ...scopedAgentParamsForSession(state, state.sessionKey),
+        });
+        aborted =
+          sessionAbort?.status === "aborted" ||
+          Boolean(sessionAbort?.abortedRunId) ||
+          sessionAbort?.ok === true;
+        // ok:true with status no-active-run is not a real abort
+        if (sessionAbort?.status === "no-active-run") {
+          aborted = false;
+        }
+      } catch {
+        // sessions.abort may be unavailable on older gateways
+      }
     }
+    if (!aborted) {
+      // Common after gateway restart: UI still shows a rehydrated open stage
+      // card / chatRunId, but the process has no active run to abort. Clear the
+      // phantom busy state so Stop unlocks the composer and the next message
+      // is not stuck behind isChatBusy.
+      clearPhantomChatRunBusy(state as RunLifecycleHost & ChatAbortRunState);
+      setChatError(state, null);
+      return true;
+    }
+    setChatError(state, null);
+    // Optimistically clear local busy state; terminal events will confirm.
+    clearPhantomChatRunBusy(state as RunLifecycleHost & ChatAbortRunState);
     return true;
   } catch (err) {
     setChatError(state, formatConnectError(err));
     return false;
   }
+}
+
+/**
+ * Clear local busy/run UI after Stop when the gateway has nothing left to
+ * abort (stale runId, restart, already-finished turn).
+ */
+function clearPhantomChatRunBusy(
+  host: RunLifecycleHost & {
+    chatSending?: boolean;
+    chatRunId?: string | null;
+    chatAbortedRunIds?: Set<string>;
+    chatThinkingStream?: string | null;
+  },
+) {
+  const runId = host.chatRunId ?? null;
+  if (runId) {
+    host.chatAbortedRunIds ??= new Set();
+    host.chatAbortedRunIds.add(runId);
+  }
+  const hadBusy = Boolean(runId || host.chatSending || host.chatStream != null);
+  host.chatSending = false;
+  host.chatThinkingStream = null;
+  if (!hadBusy && !runId) {
+    return;
+  }
+  reconcileChatRunLifecycle(host, {
+    outcome: "interrupted",
+    sessionStatus: "killed",
+    runId,
+    sessionKey: host.sessionKey,
+    clearLocalRun: true,
+    clearChatStream: true,
+    clearToolStream: true,
+    publishRunStatus: true,
+  });
 }
 
 export async function handleAbortChat(host: ChatAbortHost, opts?: ChatAbortOptions) {

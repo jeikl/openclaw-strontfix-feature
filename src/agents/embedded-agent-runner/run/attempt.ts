@@ -124,6 +124,7 @@ import {
   resolveToolLoopDetectionConfig,
 } from "../../agent-tools.js";
 import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
+import { killRunningExecSessionsForScopes } from "../../bash-process-kill.js";
 import { listActiveProcessSessionReferences } from "../../bash-process-references.js";
 import {
   analyzeBootstrapBudget,
@@ -3585,6 +3586,24 @@ export async function runEmbeddedAttempt(
           runAbortController.abort(timeoutReason);
         } else {
           runAbortController.abort(reason);
+        }
+        // Tool abort skips already-backgrounded execs; Stop/timeout must still
+        // free those leftover bash processes so they do not keep burning resources.
+        try {
+          killRunningExecSessionsForScopes({
+            scopeKeys: [
+              resolveProcessToolScopeKey({
+                sessionKey: sandboxSessionKey,
+                sessionId: params.sessionId,
+                agentId: sessionAgentId,
+              }),
+              params.sessionKey,
+              sandboxSessionKey,
+              params.sessionId,
+            ],
+          });
+        } catch {
+          // Best-effort cleanup; abort must continue even if kill fails.
         }
         abortCompaction();
         void abortActiveSession();

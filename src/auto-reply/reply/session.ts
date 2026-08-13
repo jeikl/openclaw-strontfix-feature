@@ -129,7 +129,11 @@ function stripThreadIdFromOrigin(origin: SessionEntry["origin"]): SessionEntry["
 }
 
 function resolveExplicitSessionEndReason(matchedResetTriggerLower?: string): ReplySessionEndReason {
-  return matchedResetTriggerLower === "/reset" ? "reset" : "new";
+  if (matchedResetTriggerLower === "/reset") {
+    return "reset";
+  }
+  // /clear is a fresh-session reset (WebUI parity), not a distinct lifecycle.
+  return "new";
 }
 
 function resolveSessionDefaultAccountId(params: {

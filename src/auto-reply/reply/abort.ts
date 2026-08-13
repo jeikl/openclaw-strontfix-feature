@@ -5,8 +5,13 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { getAcpSessionManager } from "../../acp/control-plane/manager.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { killRunningExecSessionsForScopes } from "../../agents/bash-process-kill.js";
 import {
   abortEmbeddedAgentRun,
+  abortEmbeddedAgentRunByRunId,
+  forceClearEmbeddedAgentRun,
+  isEmbeddedAgentRunActive,
+  listActiveEmbeddedRunSessionKeys,
   resolveActiveEmbeddedRunSessionId,
 } from "../../agents/embedded-agent-runner/runs.js";
 import {
@@ -66,6 +71,10 @@ export {
 const defaultAbortDeps = {
   getAcpSessionManager,
   abortEmbeddedAgentRun,
+  abortEmbeddedAgentRunByRunId,
+  forceClearEmbeddedAgentRun,
+  isEmbeddedAgentRunActive,
+  listActiveEmbeddedRunSessionKeys,
   resolveActiveEmbeddedRunSessionId,
   markSessionAbortTarget,
   resolveSessionAbortTarget,
@@ -73,6 +82,31 @@ const defaultAbortDeps = {
   listSubagentRunsForController,
   markSubagentRunTerminated,
 };
+
+function sessionKeysLooselyMatch(left: string, right: string): boolean {
+  const a = left.trim().toLowerCase();
+  const b = right.trim().toLowerCase();
+  if (!a || !b) {
+    return false;
+  }
+  if (a === b) {
+    return true;
+  }
+  // agent:main:telegram:... vs telegram:...
+  if (a.endsWith(`:${b}`) || b.endsWith(`:${a}`)) {
+    return true;
+  }
+  // Same agent main aliases
+  const aParsed = parseAgentSessionKey(a);
+  const bParsed = parseAgentSessionKey(b);
+  if (aParsed && bParsed && aParsed.agentId === bParsed.agentId) {
+    if (aParsed.rest === "main" || bParsed.rest === "main") {
+      // Only treat as same when one is exactly agent:X:main and the other is the same main alias.
+      return aParsed.rest === bParsed.rest;
+    }
+  }
+  return false;
+}
 
 const abortDeps = {
   ...defaultAbortDeps,
@@ -84,6 +118,14 @@ export const testing = {
       deps?.getAcpSessionManager ?? defaultAbortDeps.getAcpSessionManager;
     abortDeps.abortEmbeddedAgentRun =
       deps?.abortEmbeddedAgentRun ?? defaultAbortDeps.abortEmbeddedAgentRun;
+    abortDeps.abortEmbeddedAgentRunByRunId =
+      deps?.abortEmbeddedAgentRunByRunId ?? defaultAbortDeps.abortEmbeddedAgentRunByRunId;
+    abortDeps.forceClearEmbeddedAgentRun =
+      deps?.forceClearEmbeddedAgentRun ?? defaultAbortDeps.forceClearEmbeddedAgentRun;
+    abortDeps.isEmbeddedAgentRunActive =
+      deps?.isEmbeddedAgentRunActive ?? defaultAbortDeps.isEmbeddedAgentRunActive;
+    abortDeps.listActiveEmbeddedRunSessionKeys =
+      deps?.listActiveEmbeddedRunSessionKeys ?? defaultAbortDeps.listActiveEmbeddedRunSessionKeys;
     abortDeps.resolveActiveEmbeddedRunSessionId =
       deps?.resolveActiveEmbeddedRunSessionId ?? defaultAbortDeps.resolveActiveEmbeddedRunSessionId;
     abortDeps.markSessionAbortTarget =
@@ -101,6 +143,10 @@ export const testing = {
   resetDepsForTests(): void {
     abortDeps.getAcpSessionManager = defaultAbortDeps.getAcpSessionManager;
     abortDeps.abortEmbeddedAgentRun = defaultAbortDeps.abortEmbeddedAgentRun;
+    abortDeps.abortEmbeddedAgentRunByRunId = defaultAbortDeps.abortEmbeddedAgentRunByRunId;
+    abortDeps.forceClearEmbeddedAgentRun = defaultAbortDeps.forceClearEmbeddedAgentRun;
+    abortDeps.isEmbeddedAgentRunActive = defaultAbortDeps.isEmbeddedAgentRunActive;
+    abortDeps.listActiveEmbeddedRunSessionKeys = defaultAbortDeps.listActiveEmbeddedRunSessionKeys;
     abortDeps.resolveActiveEmbeddedRunSessionId =
       defaultAbortDeps.resolveActiveEmbeddedRunSessionId;
     abortDeps.markSessionAbortTarget = defaultAbortDeps.markSessionAbortTarget;
@@ -117,10 +163,25 @@ export function abortSessionRunTargetWithOutcome(params: { key?: string; session
   aborted: boolean;
 } {
   const sessionIds = new Set<string>();
+  const keys = new Set<string>();
   const key = normalizeOptionalString(params.key);
-  let active = key ? replyRunRegistry.isActive(key) : false;
   if (key) {
-    const activeSessionId = abortDeps.resolveActiveEmbeddedRunSessionId(key);
+    keys.add(key);
+  }
+  // Match related active registry keys (case / prefix variants) so channel
+  // /stop reaches the same embedded run WebUI is showing.
+  for (const activeKey of abortDeps.listActiveEmbeddedRunSessionKeys()) {
+    if (key && sessionKeysLooselyMatch(activeKey, key)) {
+      keys.add(activeKey);
+    }
+  }
+
+  let active = false;
+  for (const candidateKey of keys) {
+    if (replyRunRegistry.isActive(candidateKey)) {
+      active = true;
+    }
+    const activeSessionId = abortDeps.resolveActiveEmbeddedRunSessionId(candidateKey);
     if (activeSessionId) {
       active = true;
       sessionIds.add(activeSessionId);
@@ -129,18 +190,46 @@ export function abortSessionRunTargetWithOutcome(params: { key?: string; session
   const explicitSessionId = normalizeOptionalString(params.sessionId);
   if (explicitSessionId) {
     sessionIds.add(explicitSessionId);
+    if (abortDeps.isEmbeddedAgentRunActive(explicitSessionId)) {
+      active = true;
+    }
   }
 
-  let aborted = key ? replyRunRegistry.abort(key) : false;
+  let aborted = false;
+  for (const candidateKey of keys) {
+    aborted = replyRunRegistry.abort(candidateKey) || aborted;
+  }
   for (const sessionId of sessionIds) {
     aborted = abortDeps.abortEmbeddedAgentRun(sessionId) || aborted;
+    // Also try treating sessionId as a runId (channel/webchat often share ids).
+    aborted = abortDeps.abortEmbeddedAgentRunByRunId(sessionId) || aborted;
+  }
+  // Free leftover in-progress exec/bash for this stop target, including
+  // backgrounded sessions that tool-level abort intentionally leaves running.
+  const killedExecs = killRunningExecSessionsForScopes({
+    scopeKeys: [...keys, ...sessionIds],
+  });
+  if (killedExecs.attempted > 0) {
+    aborted = true;
+    active = true;
+  }
+  // If a tracked run is still active after soft abort, force-clear the lane so
+  // subsequent channel messages are not stuck behind a zombie registration.
+  for (const sessionId of sessionIds) {
+    if (abortDeps.isEmbeddedAgentRunActive(sessionId)) {
+      const forceCleared = abortDeps.forceClearEmbeddedAgentRun(sessionId, key, "user_abort");
+      if (forceCleared) {
+        aborted = true;
+        active = true;
+      }
+    }
   }
   return { active, aborted };
 }
 
 export function formatAbortReplyText(
   stoppedSubagents?: number,
-  rejectionReason?: "finalizing",
+  rejectionReason?: "finalizing" | "nothing_to_stop",
 ): string {
   if (rejectionReason === "finalizing") {
     const base = "Agent reply is already finalizing and can no longer be aborted.";
@@ -149,6 +238,9 @@ export function formatAbortReplyText(
     }
     const label = stoppedSubagents === 1 ? "sub-agent" : "sub-agents";
     return `${base} Stopped ${stoppedSubagents} ${label}.`;
+  }
+  if (rejectionReason === "nothing_to_stop") {
+    return "⚙️ Nothing to stop — no active run for this session.";
   }
   if (typeof stoppedSubagents !== "number" || stoppedSubagents <= 0) {
     return "⚙️ Agent was aborted.";

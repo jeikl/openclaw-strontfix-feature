@@ -2,6 +2,37 @@
 
 Docs: https://docs.openclaw.ai
 
+## 2026.7.756
+
+### Highlights
+
+- **阶段卡/思考卡服务端持久化与远程恢复 (Server-side Stage & Thinking Cards):** 诊断卡片写入网关磁盘存储（`~/.openclaw/run-stage-cards/`），无痕/远程浏览器与中途重连可恢复完整阶段与思考内容；多轮工具回合内单卡收拢、实时计时与历史 hydrate 更稳定。
+- **停止与清空命令全链路修复 (Stop & Clear Command Reliability):** 渠道 `/stop`、`/clear` 与 WebUI Stop 对齐同一套会话中止与重置能力，避免「假成功」和幽灵忙碌状态。
+
+### Fixes & Enhancements
+
+- **渠道 `/stop` 真正中止 Agent (Channel /stop Actually Aborts):** 扩大 sessionKey 匹配与 runId 回退中止；`forceClear` 前强制 `handle.abort()`；批量终止残留 exec/bash；停止回文区分「已中止 / 无可停 / 正在收尾」，不再一律回 “Agent was aborted”。
+- **WebUI Stop 幽灵「思考中」修复 (Stop Ghost Thinking UI):** 记录 `chatAbortedRunIds`，丢弃已停止 run 的迟到 thinking/tool/stage 事件，避免 interrupted 后再次出现蓝条思考中；Stop 找不到 run 时清理本地 busy，解锁输入框。
+- **渠道 `/clear` = WebUI `sessions.reset` (Channel /clear Parity):** 渠道 `/clear` 走 `performGatewaySessionReset`；reset 后用 `routeReply` 单独投递 `✅ Chat history cleared.`（避免 reply-run 被清空导致无渠道回执）；并广播 `sessions.changed`，WebUI 无需 F5 即可变空。
+- **WebUI `/clear` 清净诊断 UI (WebUI /clear Cleans Stage Cards):** 恢复 `executeLocal` 本地清空；同步清理阶段卡/思考卡（localStorage + 服务端 store），不再残留旧卡与清空提示气泡。
+- **Stop 批量终止残留 bash/exec (Kill Leftover Exec on Stop):** 新增 session scope 批量 cancel/kill，防止后台 sleep 等进程占资源。
+- **chat.abort / embedded abort 兜底 (Embedded Abort Fallbacks):** 渠道 run 不在 `chatAbortControllers` 时，通过 runId/sessionId 回退中止；Stop 时清理 scoped 进程。
+- **阶段卡 live 绑定安全 (Safe Open-Card Hydrate):** 仅在 sessions 列表确认 run 仍 active 时把开放卡片绑定为 live `chatRunId`，网关重启后的孤儿卡自动 finalize，避免假 busy。
+- **注册服务端 `/clear` 命令 (Register /clear Command):** 渠道侧可识别 `/clear` 为系统命令，不再把清空指令发给大模型。
+
+## 2026.7.755
+
+### Fixes & Enhancements
+
+- **彻底修复渠道消息不弹阶段/思考卡 (Fix Missing Stage/Thinking Cards for External Channels):** 在 754 版本基于 `chatRunState` 的尝试未生效，因为渠道插件发起的 `runId` 并未经过 WebSocket 的 `chat.send`，从而完全不在注册表内。本版本彻底从底层 `agent-events.ts` 解决该问题：无论 `isControlUiVisible` 配置是否开启，对于 `run_stage` 和 `thinking` 流均硬性保留 `sessionKey` 上下文。现在即使是钉钉等外部渠道，其卡片也能完美呈现在对应的 WebUI 会话中！
+- **修复渠道消息双重回复问题 (Fix WebUI Double Message for DingTalk):** 由于部分插件配置了重试/并发，以及网关内置了 `dispatchReplyFromConfig` 会自动向 `session.messages` 压入对话记录。同时部分渠道插件配置由于在极端场景下重发导致 WebUI 会渲染出两次回复内容。已协助理清逻辑：若用户在服务器同时通过 `openclaw.json` (加载路径) 与 `extensions/dingtalk-connector` (全量全局包) 两次装载插件，会导致双重订阅重复派发消息给 WebUI（请务必保留单一插件引入途径以避免双重执行！）。
+
+## 2026.7.754
+
+### Fixes & Enhancements
+
+- **渠道插件消息 WebUI 诊断卡片支持 (Channel SessionKey Resolution for WebUI Cards):** 修复钉钉/飞书等渠道插件触发 Agent 运行时因 `run_stage` / `thinking` 事件未附带 `sessionKey` 导致网关丢弃卡片的 Bug。现在网关会动态从注册表中反向解析渠道运行的 `sessionKey`，使 WebUI 能完美展示所有渠道消息产生的阶段卡与思考卡。
+
 ## 2026.7.753
 
 ### Fixes & Enhancements

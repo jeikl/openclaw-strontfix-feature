@@ -37,6 +37,7 @@ type SessionChangedEventInfo = {
   status: SessionRunStatus | null;
   archived: boolean | null;
   isChatTurn: boolean;
+  reason: string | null;
 };
 
 type ThinkingMetadataCarrier = {
@@ -264,6 +265,7 @@ export function readSessionChangedEvent(payload: unknown): SessionChangedEventIn
     status: parsed.status,
     archived: parsed.archived,
     isChatTurn: parsed.isChatTurn,
+    reason: parsed.reason,
   };
 }
 

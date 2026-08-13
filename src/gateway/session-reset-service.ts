@@ -46,6 +46,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logVerbose } from "../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
 import { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
+import { clearRunStageCardsForSession } from "../infra/run-stage-store.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { runPluginHostCleanup } from "../plugins/host-hook-cleanup.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
@@ -1264,6 +1265,30 @@ export async function performGatewaySessionReset(params: {
           targetSessionKey: target.canonicalKey ?? params.key,
           reason: "session-reset",
         });
+      }
+      // Diagnosis cards are keyed by sessionKey (not sessionId). Drop them so
+      // /clear and sessions.reset leave WebUI without stale stage/thinking UI.
+      const stageKeys = new Set<string>([target.canonicalKey, params.key, ...target.storeKeys]);
+      for (const stageKey of stageKeys) {
+        if (stageKey?.trim()) {
+          clearRunStageCardsForSession(stageKey);
+        }
+      }
+      // Always notify subscribed Control UI / TUI clients so a channel-side
+      // /clear refreshes the open chat without requiring a hard reload.
+      try {
+        const { resolveInProcessGatewayRequestContext } = await import("./server-plugins.js");
+        const gatewayContext = resolveInProcessGatewayRequestContext();
+        if (gatewayContext) {
+          const { emitSessionsChanged } = await import("./server-methods/session-change-event.js");
+          emitSessionsChanged(gatewayContext, {
+            sessionKey: target.canonicalKey,
+            ...(target.canonicalKey === "global" ? { agentId: target.agentId } : {}),
+            reason: params.reason,
+          });
+        }
+      } catch (err) {
+        logVerbose(`sessions.changed after reset failed: ${String(err)}`);
       }
       return {
         ok: true,

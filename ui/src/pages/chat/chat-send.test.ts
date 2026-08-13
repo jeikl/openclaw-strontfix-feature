@@ -3168,18 +3168,31 @@ describe("handleAbortChat", () => {
     expect(host.chatMessage).toBe("next prompt");
   });
 
-  it("surfaces an error when neither runId nor session abort cancels a run", async () => {
-    const request = vi.fn(async () => ({ ok: true, aborted: false, runIds: [] }));
+  it("clears phantom busy state when neither runId nor session abort finds a run", async () => {
+    // After gateway restart the UI may still hold a rehydrated chatRunId while
+    // the process has nothing abortable. Stop must unlock the composer.
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.abort") {
+        return { ok: true, aborted: false, runIds: [] };
+      }
+      if (method === "sessions.abort") {
+        return { ok: true, status: "no-active-run", abortedRunId: null };
+      }
+      return {};
+    });
     const host = makeHost({
       client: { request } as unknown as ChatHost["client"],
       chatRunId: "run-gone",
+      chatSending: true,
       sessionKey: "agent:main",
     });
 
     await handleAbortChat(host);
 
-    expect(request).toHaveBeenCalledTimes(2);
-    expect(host.lastError).toMatch(/Nothing to stop/);
+    expect(request).toHaveBeenCalledWith("chat.abort", expect.anything());
+    expect(host.chatRunId).toBeNull();
+    expect(host.chatSending).toBe(false);
+    expect(host.lastError).toBeNull();
   });
 
   it("treats an in-flight send as abortable before chatRunId is observed", () => {

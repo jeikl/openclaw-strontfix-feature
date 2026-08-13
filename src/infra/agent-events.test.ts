@@ -513,6 +513,43 @@ describe("agent-events sequencing", () => {
     expect(receivedSessionKey).toBe("session-quietchat");
   });
 
+  test("preserves sessionKey for run_stage/thinking events hidden from Control UI", () => {
+    resetAgentRunContextForTest();
+    registerAgentRunContext("run-hidden-cards", {
+      sessionKey: "session-dingtalk",
+      isControlUiVisible: false,
+    });
+
+    const received: Array<{ stream: string; sessionKey?: string }> = [];
+    const stop = onAgentEvent((evt) => {
+      received.push({ stream: evt.stream, sessionKey: evt.sessionKey });
+    });
+    emitAgentEvent({
+      runId: "run-hidden-cards",
+      stream: "run_stage",
+      data: { stage: "model_first", phase: "start" },
+    });
+    emitAgentEvent({
+      runId: "run-hidden-cards",
+      stream: "thinking",
+      data: { text: "reasons", delta: "reasons" },
+    });
+    // Assistant still redacts sessionKey so hidden channel traffic does not
+    // leak into unscoped Control UI consumers that key off sessionKey alone.
+    emitAgentEvent({
+      runId: "run-hidden-cards",
+      stream: "assistant",
+      data: { text: "hi" },
+    });
+    stop();
+
+    expect(received).toEqual([
+      { stream: "run_stage", sessionKey: "session-dingtalk" },
+      { stream: "thinking", sessionKey: "session-dingtalk" },
+      { stream: "assistant", sessionKey: undefined },
+    ]);
+  });
+
   test("falls back to registered sessionKey for hidden lifecycle events", () => {
     resetAgentRunContextForTest();
     registerAgentRunContext("run-hidden-lifecycle-context", {

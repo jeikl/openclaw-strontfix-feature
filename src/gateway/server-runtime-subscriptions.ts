@@ -3,7 +3,12 @@ import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { createAgentEventAuditRecorder } from "../audit/agent-event-audit.js";
 import { isAuditLedgerEnabled } from "../audit/audit-config.js";
 import { getRuntimeConfig } from "../config/io.js";
-import { clearAgentRunContext, onAgentAuditEvent, onAgentEvent } from "../infra/agent-events.js";
+import {
+  clearAgentRunContext,
+  getAgentRunContext,
+  onAgentAuditEvent,
+  onAgentEvent,
+} from "../infra/agent-events.js";
 import { onTrustedToolExecutionEvent } from "../infra/diagnostic-events.js";
 import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
 import type { SubsystemLogger } from "../logging/subsystem.js";
@@ -238,7 +243,15 @@ export function startGatewayEventSubscriptions(params: {
 
   // WebUI diagnosis cards: persist run_stage + thinking server-side so remote
   // browsers can load them (not model context / transcript).
-  const stopRunStagePersistence = startRunStagePersistence();
+  // Channel-routed runs are usually NOT in chatRunState (only chat.send is);
+  // fall back to agent run context sessionKey for those.
+  const stopRunStagePersistence = startRunStagePersistence((runId) => {
+    const chatLink = params.chatRunState.registry.peek(runId);
+    if (chatLink?.sessionKey) {
+      return chatLink.sessionKey;
+    }
+    return getAgentRunContext(runId)?.sessionKey ?? null;
+  });
 
   const unsubscribeAgentEvents = onAgentEvent((evt) => {
     auditRecorder?.record(evt);

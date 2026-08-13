@@ -27,6 +27,7 @@ const liveByRunId = new Map<string, LiveCard>();
 let started = false;
 let writeTimer: ReturnType<typeof setTimeout> | null = null;
 const dirtyRunIds = new Set<string>();
+let sessionKeyResolver: ((runId: string) => string | null) | null = null;
 
 function scheduleFlush(runId: string): void {
   dirtyRunIds.add(runId);
@@ -46,9 +47,9 @@ function scheduleFlush(runId: string): void {
   }, 200);
 }
 
-function flushCard(live: LiveCard): void {
+function liveToRecord(live: LiveCard): RunStageCardRecord {
   const thinkingDurationMs = live.thinkingSegments.reduce((sum, s) => sum + (s.durationMs ?? 0), 0);
-  const record: RunStageCardRecord = {
+  return {
     id: live.id,
     sessionKey: live.sessionKey,
     runId: live.runId,
@@ -59,6 +60,10 @@ function flushCard(live: LiveCard): void {
     thinkingDurationMs: thinkingDurationMs > 0 ? thinkingDurationMs : null,
     thinkingSegments: live.thinkingSegments.map((s) => ({ ...s })),
   };
+}
+
+function flushCard(live: LiveCard): void {
+  const record = liveToRecord(live);
   saveRunStageCardToStore(record);
   // logInfo(
   //   `[run-stage-card] flushCard id=${live.id} runId=${live.runId} stages=${live.stages.length} thinkingSegs=${live.thinkingSegments.length} endedAt=${live.endedAt}`,
@@ -72,6 +77,9 @@ function ensureLive(evt: AgentEventPayload): LiveCard | null {
   }
   let sessionKey =
     typeof evt.sessionKey === "string" && evt.sessionKey.trim() ? evt.sessionKey.trim() : "";
+  if (!sessionKey && sessionKeyResolver) {
+    sessionKey = sessionKeyResolver(runId) ?? "";
+  }
   const existing = liveByRunId.get(runId);
   if (existing) {
     if (sessionKey && !existing.sessionKey) {
@@ -94,7 +102,6 @@ function ensureLive(evt: AgentEventPayload): LiveCard | null {
     thinkingStartedAt: null,
   };
   liveByRunId.set(runId, card);
-  // logInfo(`[run-stage-card] createLiveCard id=${card.id} runId=${runId} sessionKey=${sessionKey}`);
   return card;
 }
 
@@ -307,8 +314,29 @@ function handleEvent(evt: AgentEventPayload): void {
   }
 }
 
+/**
+ * In-memory live cards for a session (mid-run). Merged into sessions.runStages.get
+ * so operators re-joining a channel session mid-turn see all stages so far.
+ */
+export function listLiveRunStageCardsForSession(sessionKey: string): RunStageCardRecord[] {
+  const key = sessionKey.trim();
+  if (!key) {
+    return [];
+  }
+  const out: RunStageCardRecord[] = [];
+  for (const live of liveByRunId.values()) {
+    if (live.sessionKey === key) {
+      out.push(liveToRecord(live));
+    }
+  }
+  return out;
+}
+
 /** Start gateway-side run-stage diagnosis persistence (idempotent). */
-export function startRunStagePersistence(): () => void {
+export function startRunStagePersistence(resolver?: (runId: string) => string | null): () => void {
+  if (resolver) {
+    sessionKeyResolver = resolver;
+  }
   if (started) {
     return () => {};
   }
@@ -317,6 +345,7 @@ export function startRunStagePersistence(): () => void {
   return () => {
     stop();
     started = false;
+    sessionKeyResolver = null;
     if (writeTimer) {
       clearTimeout(writeTimer);
       writeTimer = null;

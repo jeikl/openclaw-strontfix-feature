@@ -793,6 +793,15 @@ export function buildBuiltinChatCommands(
       tier: "essential",
     }),
     defineChatCommand({
+      key: "clear",
+      nativeName: "clear",
+      description: "Clear chat history (same as a fresh session).",
+      textAlias: "/clear",
+      acceptsArgs: false,
+      category: "session",
+      tier: "essential",
+    }),
+    defineChatCommand({
       key: "name",
       nativeName: "name",
       description: "Name or rename the current session.",

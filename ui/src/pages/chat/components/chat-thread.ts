@@ -121,6 +121,8 @@ type ChatThreadProps = {
   runStageCards?: import("../run-stage-ui.ts").ChatRunStageCard[] | null;
   chatRunId?: string | null;
   chatRunStageCardId?: string | null;
+  /** Live elapsed-seconds ticker — must be in guard deps for active stage timers. */
+  runStageTick?: number;
   streamStartedAt: number | null;
   queue: ChatQueueItem[];
   showThinking: boolean;
@@ -769,6 +771,8 @@ export function renderChatThread(props: ChatThreadProps) {
             props.thinkingStream ?? "",
             JSON.stringify(props.runStages ?? null),
             JSON.stringify(props.runStageCards ?? null),
+            // Active stages compute elapsed via Date.now(); tick forces guard to re-run.
+            props.runStageTick ?? 0,
             props.showToolCalls,
             Boolean(props.autoExpandToolCalls),
             props.assistantName,
@@ -886,24 +890,52 @@ export function renderChatThread(props: ChatThreadProps) {
                 }
               : null;
 
-            // When a turn is live, attach liveCard directly to the active User message turn (at the top of the turn)
+            // When a turn is live, attach liveCard to the user message that started
+            // THIS turn. Channel events often arrive before transcript has the new
+            // user bubble — do NOT fall back to the previous user (already answered)
+            // or the first assistant message (wrong turn). Hold as trailing card.
+            let danglingLiveCard: typeof liveCard = null;
             if (showLiveCard && liveCard) {
-              const lastUser = [...coalesced]
-                .reverse()
-                .find((it) => it.kind === "group" && it.role === "user");
-              if (lastUser) {
-                const existing = cardsAfterKey.get(lastUser.key) ?? [];
-                cardsAfterKey.set(lastUser.key, [...existing, liveCard]);
-              } else {
-                const firstAsst = coalesced.find(
-                  (it) =>
-                    (it.kind === "group" && (it.role === "assistant" || it.role === "tool")) ||
-                    it.kind === "stream-run",
-                );
-                if (firstAsst) {
-                  const existing = cardsBeforeKey.get(firstAsst.key) ?? [];
-                  cardsBeforeKey.set(firstAsst.key, [...existing, liveCard]);
+              const cardStart = liveCard.startedAt;
+              // Latest user whose timestamp is at/before this card (with small slop).
+              let bestUser: (typeof coalesced)[0] | null = null;
+              for (const it of coalesced) {
+                if (it.kind !== "group" || it.role !== "user") {
+                  continue;
                 }
+                const userTs = it.timestamp ?? 0;
+                if (userTs <= cardStart + 10_000) {
+                  bestUser = it;
+                }
+              }
+              let attachUser = bestUser;
+              if (bestUser && bestUser.kind === "group") {
+                const userTs = bestUser.timestamp ?? 0;
+                // If an assistant/tool reply already sits after this user and before
+                // the live card start, that user turn is finished — new user bubble
+                // has not landed in history yet.
+                const alreadyAnswered = coalesced.some((it) => {
+                  if (it.kind === "group" && (it.role === "assistant" || it.role === "tool")) {
+                    const t = it.timestamp ?? 0;
+                    return t > userTs && t < cardStart - 200;
+                  }
+                  if (it.kind === "stream-run") {
+                    // In-flight stream after this user still belongs to this turn.
+                    return false;
+                  }
+                  return false;
+                });
+                if (alreadyAnswered) {
+                  attachUser = null;
+                }
+              }
+              if (attachUser) {
+                const existing = cardsAfterKey.get(attachUser.key) ?? [];
+                cardsAfterKey.set(attachUser.key, [...existing, liveCard]);
+              } else {
+                // No matching user yet: render after the last message block so we
+                // never paint onto the previous turn.
+                danglingLiveCard = liveCard;
               }
             }
 
@@ -1085,12 +1117,14 @@ export function renderChatThread(props: ChatThreadProps) {
                   return nothing;
                 },
               )}
-              ${(function () {
-                // Trailing cards (orphaned cards that failed to anchor to any message) are intentionally hidden.
-                // They represent aborted turns that have no corresponding messages in the chat history.
-                // Rendering them at the bottom would confuse the user and push the live stream up.
-                return nothing;
-              })()}
+              ${danglingLiveCard
+                ? html`${renderRunStageCard(danglingLiveCard, {
+                    live: true,
+                    nowMs: Date.now(),
+                    thinkingText: danglingLiveCard.thinkingText,
+                    thinkingStreaming: Boolean(liveThinkingText),
+                  })}`
+                : nothing}
             `;
           },
         )}

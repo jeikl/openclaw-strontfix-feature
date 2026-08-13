@@ -72,6 +72,8 @@ export type ChatProps = {
   runStageCards?: ChatRunStageCard[] | null;
   chatRunId?: string | null;
   chatRunStageCardId?: string | null;
+  /** Live elapsed-seconds ticker for active stages. */
+  runStageTick?: number;
   streamStartedAt: number | null;
   assistantAvatarUrl?: string | null;
   draft: string;
@@ -179,6 +181,7 @@ export function renderChat(props: ChatProps) {
     runStageCards: props.runStageCards ?? null,
     chatRunId: props.chatRunId ?? null,
     chatRunStageCardId: props.chatRunStageCardId ?? null,
+    runStageTick: props.runStageTick ?? 0,
     streamStartedAt: props.streamStartedAt,
     queue: props.queue,
     showThinking: props.showThinking,

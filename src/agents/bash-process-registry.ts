@@ -325,6 +325,11 @@ export function listRunningSessions() {
   return Array.from(runningSessions.values()).filter((s) => s.backgrounded);
 }
 
+/** Lists all in-memory running sessions, including non-backgrounded foreground execs. */
+export function listAllRunningSessions() {
+  return Array.from(runningSessions.values());
+}
+
 /** Lists retained finished background sessions. */
 export function listFinishedSessions() {
   return Array.from(finishedSessions.values());
