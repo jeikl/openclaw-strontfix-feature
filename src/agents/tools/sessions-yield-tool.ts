@@ -4,6 +4,7 @@
  * Ends the current turn after subagent spawning so completion events can resume the session later.
  */
 import { Type } from "typebox";
+import { hasActiveLongTaskForSession, shouldBlockEndTurnForSession } from "../long-task-runtime.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readStringParam } from "./common.js";
 
@@ -14,6 +15,7 @@ const SessionsYieldToolSchema = Type.Object({
 /** Creates the sessions_yield tool for runtimes that support yield callbacks. */
 export function createSessionsYieldTool(opts?: {
   sessionId?: string;
+  sessionKey?: string;
   onYield?: (message: string) => Promise<void> | void;
 }): AnyAgentTool {
   return {
@@ -26,6 +28,16 @@ export function createSessionsYieldTool(opts?: {
       const message = readStringParam(params, "message") || "Turn yielded.";
       if (!opts?.sessionId) {
         return jsonResult({ status: "error", error: "No session context" });
+      }
+      if (
+        shouldBlockEndTurnForSession(opts.sessionKey) &&
+        hasActiveLongTaskForSession(opts.sessionKey)
+      ) {
+        return jsonResult({
+          status: "parked",
+          message:
+            "A long task is still running; yield is blocked until it finishes or is stopped.",
+        });
       }
       if (!opts?.onYield) {
         return jsonResult({ status: "error", error: "Yield not supported in this context" });

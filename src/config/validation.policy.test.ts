@@ -50,6 +50,42 @@ function requireIssue<T extends { path: string }>(issues: T[], path: string): T 
   return issue;
 }
 
+describe("unknown config keys at load time", () => {
+  it("ignores unknown keys as warnings so newer config files still load", () => {
+    const result = validateConfigObjectRaw({
+      tools: {
+        longTask: {
+          shortPolls: 4,
+        },
+        futureUnknown: true,
+      },
+      totallyUnknownRoot: 1,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    expect(result.config.tools?.longTask?.shortPolls).toBe(4);
+    const warningPaths = (result.warnings ?? []).map((warning) => warning.path);
+    expect(warningPaths).toContain("totallyUnknownRoot");
+    expect(warningPaths).toContain("tools.futureUnknown");
+    expect(result.config.tools).not.toHaveProperty("futureUnknown");
+    expect(result.config).not.toHaveProperty("totallyUnknownRoot");
+  });
+
+  it("still rejects real type errors after stripping unknown keys", () => {
+    const result = validateConfigObjectRaw({
+      gateway: { port: "not-a-port" },
+      totallyUnknownRoot: 1,
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(result.issues.some((issue) => issue.path.includes("port"))).toBe(true);
+  });
+});
+
 describe("config validation SecretRef policy guards", () => {
   it("surfaces a policy error for hooks.token SecretRef objects", () => {
     const result = validateConfigObjectRaw({

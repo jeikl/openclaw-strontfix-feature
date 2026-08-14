@@ -106,6 +106,8 @@ const ACTIVE_MEMORY_RESERVED_TOOLS_ALLOW = new Set([
   "process",
   "read",
   "session_status",
+  "tasks_status",
+  "tasks_list",
   "sessions_history",
   "sessions_list",
   "sessions_send",

@@ -135,6 +135,12 @@ export type ExecToolDetails =
       timedOut?: boolean;
       noOutputTimedOut?: boolean;
       cwd?: string;
+      sessionId?: string;
+      folded?: boolean;
+      shortPolls?: number;
+      shortPollElapsedMs?: number;
+      phase?: "short_polling" | "long_running";
+      taskStatus?: "succeeded" | "failed" | "timed_out" | "cancelled";
     }
   | {
       status: "approval-pending";

@@ -21,9 +21,8 @@ function deriveExecShortName(fullPath: string): string {
 /** Builds the model-facing exec tool description for the current platform/config. */
 export function describeExecTool(params?: { agentId?: string; hasCronTool?: boolean }): string {
   const base = [
-    "Execute shell commands with background continuation for work that starts now.",
-    "Use yieldMs/background to continue later via process tool.",
-    "For long-running work started now, rely on automatic completion wake when it is enabled and the command emits output or fails; otherwise use process to confirm completion. Use process whenever you need logs, status, input, or intervention.",
+    "Execute shell commands. The runtime waits for long commands internally (short polls, then event park) and returns one folded result. Do not process-poll to wait.",
+    "Use yieldMs/background only to hand the command to that runtime wait. Use process for logs, stdin, or kill — not as a wait loop.",
     params?.hasCronTool
       ? "Do not use exec sleep or delay loops for reminders or deferred follow-ups; use cron instead."
       : undefined,
@@ -73,7 +72,7 @@ export function describeExecTool(params?: { agentId?: string; hasCronTool?: bool
 export function describeProcessTool(params?: { hasCronTool?: boolean }): string {
   return [
     "Manage running exec sessions for commands already started: list, poll, log, write, send-keys, submit, paste, kill.",
-    "Use poll/log when you need status, logs, quiet-success confirmation, or completion confirmation when automatic completion wake is unavailable. Use poll/log also for input-wait hints. Use write/send-keys/submit/paste/kill for input or intervention.",
+    "Do not poll a session owned by the long-task runtime. Use tasks_status or /status to inspect. Use log/write/send-keys/submit/paste/kill for output or intervention.",
     params?.hasCronTool
       ? "Do not use process polling to emulate timers or reminders; use cron for scheduled follow-ups."
       : undefined,

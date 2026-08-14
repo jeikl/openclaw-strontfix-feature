@@ -1218,12 +1218,12 @@ describe("config paths", () => {
 });
 
 describe("config strict validation", () => {
-  it("rejects unknown fields", () => {
+  it("ignores unknown fields at runtime instead of rejecting the config", () => {
     const res = validateConfigObject({
       agents: { list: [{ id: "openclaw" }] },
       customUnknownField: { nested: "value" },
     });
-    expect(res.ok).toBe(false);
+    expect(res.ok).toBe(true);
   });
 
   it("accepts documented agents.list[].params overrides", () => {

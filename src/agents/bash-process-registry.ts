@@ -185,6 +185,67 @@ export function drainSession(session: ProcessSession) {
   return { stdout, stderr };
 }
 
+const sessionExitWaiters = new Map<string, Set<(kind: "exit") => void>>();
+
+function notifySessionExitWaiters(sessionId: string): void {
+  const waiters = sessionExitWaiters.get(sessionId);
+  if (!waiters) {
+    return;
+  }
+  sessionExitWaiters.delete(sessionId);
+  for (const waiter of waiters) {
+    waiter("exit");
+  }
+}
+
+/** Event-driven wait for a process session to exit. No busy-loop. */
+export function waitForSessionExit(
+  sessionId: string,
+  timeoutMs: number,
+  signal?: AbortSignal,
+): Promise<"exit" | "timeout" | "abort"> {
+  const running = runningSessions.get(sessionId);
+  if (!running || running.exited || finishedSessions.has(sessionId)) {
+    return Promise.resolve("exit");
+  }
+  if (signal?.aborted) {
+    return Promise.resolve("abort");
+  }
+  if (timeoutMs <= 0) {
+    return Promise.resolve("timeout");
+  }
+  return new Promise((resolve) => {
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const finish = (kind: "exit" | "timeout" | "abort") => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (timer) {
+        clearTimeout(timer);
+      }
+      signal?.removeEventListener("abort", onAbort);
+      const waiters = sessionExitWaiters.get(sessionId);
+      if (waiters) {
+        waiters.delete(onExit);
+        if (waiters.size === 0) {
+          sessionExitWaiters.delete(sessionId);
+        }
+      }
+      resolve(kind);
+    };
+    const onExit = () => finish("exit");
+    const onAbort = () => finish("abort");
+    const waiters = sessionExitWaiters.get(sessionId) ?? new Set<(kind: "exit") => void>();
+    waiters.add(onExit);
+    sessionExitWaiters.set(sessionId, waiters);
+    timer = setTimeout(() => finish("timeout"), timeoutMs);
+    timer.unref?.();
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
 /** Moves a session to finished state and records exit metadata. */
 export function markExited(
   session: ProcessSession,
@@ -200,6 +261,7 @@ export function markExited(
   session.exitReason = exitReason;
   session.noOutputTimedOut = noOutputTimedOut;
   session.tail = tail(session.aggregated, 2000);
+  notifySessionExitWaiters(session.id);
   moveToFinished(session, status);
 }
 
@@ -339,6 +401,7 @@ export function listFinishedSessions() {
 export function resetProcessRegistryForTests() {
   runningSessions.clear();
   finishedSessions.clear();
+  sessionExitWaiters.clear();
   stopSweeper();
 }
 

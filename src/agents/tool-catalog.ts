@@ -205,6 +205,22 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     includeInOpenClawGroup: true,
   },
   {
+    id: "tasks_status",
+    label: "tasks_status",
+    description: "Inspect long-task status without process poll",
+    sectionId: "sessions",
+    profiles: ["coding"],
+    includeInOpenClawGroup: true,
+  },
+  {
+    id: "tasks_list",
+    label: "tasks_list",
+    description: "List this session's long-task ledger",
+    sectionId: "sessions",
+    profiles: ["coding"],
+    includeInOpenClawGroup: true,
+  },
+  {
     id: "browser",
     label: "browser",
     description: "Control web browser",

@@ -66,6 +66,7 @@ import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
 import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
 import { createSkillWorkshopTool } from "./tools/skill-workshop-tool.js";
 import { createSubagentsTool } from "./tools/subagents-tool.js";
+import { createTasksListTool, createTasksStatusTool } from "./tools/tasks-status-tool.js";
 import { createTranscriptsTool } from "./tools/transcripts-tool.js";
 import { createTtsTool } from "./tools/tts-tool.js";
 import { createUpdatePlanTool } from "./tools/update-plan-tool.js";
@@ -551,6 +552,7 @@ export function createOpenClawTools(
       : []),
     createSessionsYieldTool({
       sessionId: options?.sessionId,
+      sessionKey: options?.agentSessionKey ?? options?.runSessionKey,
       onYield: options?.onYield,
     }),
     createSubagentsTool({
@@ -569,6 +571,12 @@ export function createOpenClawTools(
         accountId: options?.agentAccountId,
         threadId: options?.currentThreadTs ?? options?.agentThreadId,
       },
+    }),
+    createTasksStatusTool({
+      sessionKey: options?.agentSessionKey ?? options?.runSessionKey,
+    }),
+    createTasksListTool({
+      sessionKey: options?.agentSessionKey ?? options?.runSessionKey,
     }),
     ...collectPresentOpenClawTools([webSearchTool, webFetchTool, imageTool, pdfTool]),
   ];

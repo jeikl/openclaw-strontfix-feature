@@ -781,6 +781,21 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.loopDetection.detectors.pingPong": "Enable ping-pong loop detection (default: true).",
   "tools.loopDetection.postCompactionGuard.windowSize":
     "Number of post-compaction attempts during which the guard stays armed (default: 3). Lower values are stricter; higher values give the agent more attempts before abort.",
+  "tools.longTask.shortPolls":
+    "How many runtime short-poll slices to run before entering long_running park (default: 4). These are code-loop waits, not extra model tool calls.",
+  "tools.longTask.shortPollTimeoutMs":
+    "Max wait in milliseconds for each short-poll slice (default: 10000).",
+  "tools.longTask.maxWaitMs":
+    "Max event-driven park duration after short polling (default: 1800000, 30 minutes).",
+  "tools.longTask.blockEndTurn":
+    "When true (default), refuse to end the agent turn while a long task is still running.",
+  "tools.longTask.retention.succeededMs":
+    "How long to keep succeeded long-task records (default: 7 days).",
+  "tools.longTask.retention.failedMs":
+    "How long to keep failed, timed_out, and cancelled long-task records (default: 7 days).",
+  "tools.longTask.retention.lostMs": "How long to keep lost long-task records (default: 24 hours).",
+  "tools.longTask.retention.outputMs":
+    "How long to keep full long-task output files (default: 3 days).",
   "tools.exec.notifyOnExit":
     "When true (default), backgrounded exec sessions on exit and node exec lifecycle events enqueue a system event and request a heartbeat.",
   "tools.exec.notifyOnExitEmptySuccess":

@@ -16,6 +16,7 @@ import type { EmbeddedFullAccessBlockedReason } from "../../agents/embedded-agen
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
+import { hasActiveLongTaskForSession } from "../../agents/long-task-runtime.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/openai-routing.js";
 import { resolveIngressWorkspaceOverrideForSpawnedRun } from "../../agents/spawned-context.js";
 import type { SilentReplyPromptMode } from "../../agents/system-prompt.types.js";
@@ -1282,7 +1283,8 @@ export async function runPreparedReply(
     activeRunAcceptsCurrentThread &&
     !isHeartbeatRun &&
     !effectiveResetTriggered &&
-    resolvedQueue.mode === "steer";
+    resolvedQueue.mode === "steer" &&
+    !hasActiveLongTaskForSession(sessionKey);
   const shouldFollowup =
     !effectiveResetTriggered &&
     ((isRoomEvent && isActive) ||

@@ -44,6 +44,8 @@ describe("tool-catalog", () => {
       "sessions_yield",
       "subagents",
       "session_status",
+      "tasks_status",
+      "tasks_list",
       "cron",
       "get_goal",
       "create_goal",

@@ -1,6 +1,7 @@
 /** Handles /new and /reset command flows, including soft reset and ACP-bound sessions. */
 import { clearBootstrapSnapshot } from "../../agents/bootstrap-cache.js";
 import { clearAllCliSessions } from "../../agents/cli-session.js";
+import { cancelLongTasksForSession } from "../../agents/long-task-runtime.js";
 import { resetConfiguredBindingTargetInPlace } from "../../channels/plugins/binding-targets.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { performGatewaySessionReset } from "../../gateway/session-reset-service.js";
@@ -135,6 +136,7 @@ export async function maybeHandleResetCommand(
     return { shouldContinue: false };
   }
 
+  cancelLongTasksForSession(params.sessionKey, resetMatch[1]?.toLowerCase() ?? "reset");
   const matched = resetMatch[1]?.toLowerCase() ?? "new";
   // /clear must use the same gateway reset as WebUI sessions.reset so channel and
   // Control UI share one transcript + stage-card cleanup path.

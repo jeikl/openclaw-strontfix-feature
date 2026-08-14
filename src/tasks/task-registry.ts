@@ -1639,6 +1639,7 @@ export function markTaskTerminalById(params: {
   error?: string;
   terminalSummary?: string | null;
   terminalOutcome?: TaskTerminalOutcome | null;
+  cleanupAfter?: number;
 }): TaskRecord | null {
   ensureTaskRegistryReady();
   const patch: Partial<TaskRecord> = {
@@ -1656,11 +1657,24 @@ export function markTaskTerminalById(params: {
           }),
         }
       : {}),
+    ...(typeof params.cleanupAfter === "number" ? { cleanupAfter: params.cleanupAfter } : {}),
   };
   if (Object.hasOwn(params, "error")) {
     patch.error = params.error;
   }
   return updateTask(params.taskId, patch);
+}
+
+export function updateTaskProgressById(params: {
+  taskId: string;
+  progressSummary: string;
+  lastEventAt?: number;
+}): TaskRecord | null {
+  ensureTaskRegistryReady();
+  return updateTask(params.taskId, {
+    progressSummary: normalizeTaskSummary(params.progressSummary),
+    lastEventAt: params.lastEventAt ?? Date.now(),
+  });
 }
 
 export function markTaskLostById(params: {

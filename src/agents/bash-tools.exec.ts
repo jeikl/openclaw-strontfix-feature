@@ -88,6 +88,13 @@ import {
   truncateMiddle,
 } from "./bash-tools.shared.js";
 import { createModelExecAutoReviewer } from "./exec-auto-reviewer.js";
+import { resolveLongTaskConfig } from "./long-task-config.js";
+import {
+  cancelLongTaskByProcessSession,
+  formatFoldedLongTaskText,
+  isProcessSessionLongTaskManaged,
+  runLongTaskSupervisor,
+} from "./long-task-runtime.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { EXEC_TOOL_DISPLAY_SUMMARY } from "./tool-description-presets.js";
 import { type AgentToolWithMeta, failedTextResult, textResult } from "./tools/common.js";
@@ -270,6 +277,39 @@ function buildExecForegroundResult(params: {
     noOutputTimedOut: params.outcome.noOutputTimedOut,
     cwd: params.cwd,
   });
+}
+
+function buildFoldedLongTaskExecResult(params: {
+  result: import("./long-task-runtime.js").LongTaskFoldedResult;
+  cwd?: string;
+  warningText?: string;
+}): AgentToolResult<ExecToolDetails> {
+  const warningText = params.warningText?.trim() ? `${params.warningText}\n\n` : "";
+  const text = `${warningText}${formatFoldedLongTaskText(params.result)}`;
+  const details: ExecToolDetails = {
+    status:
+      params.result.status === "succeeded"
+        ? "completed"
+        : params.result.status === "timed_out"
+          ? "failed"
+          : "failed",
+    exitCode: params.result.exitCode,
+    exitSignal: params.result.exitSignal,
+    durationMs: params.result.elapsedMs,
+    aggregated: params.result.aggregated,
+    timedOut: params.result.timedOut,
+    cwd: params.cwd,
+    sessionId: params.result.sessionId,
+    folded: true,
+    shortPolls: params.result.shortPolls,
+    shortPollElapsedMs: params.result.shortPollElapsedMs,
+    phase: params.result.phase,
+    taskStatus: params.result.status,
+  };
+  if (params.result.status === "succeeded") {
+    return textResult(text, details);
+  }
+  return failedTextResult(text, details);
 }
 
 const PREFLIGHT_ENV_OPTIONS_WITH_VALUES = new Set([
@@ -2001,7 +2041,8 @@ export function createExecTool(
       let yieldTimer: NodeJS.Timeout | null = null;
       let registeredAbortSignal: AbortSignal | null = null;
 
-      // Tool-call abort should not kill backgrounded sessions; timeouts still must.
+      // Tool-call abort should not kill unmanaged backgrounded sessions; long-task
+      // park owns the abort and must tear down the wait plus the process.
       const onAbortSignal = () => {
         // Immediately suppress onUpdate calls so that any late stdout/stderr
         // from the still-running process cannot push a rejected Promise into
@@ -2011,6 +2052,10 @@ export function createExecTool(
         // tool_execution_update events even for backgrounded sessions (which
         // retrieve output via process poll/log instead of onUpdate callbacks).
         run.disableUpdates();
+        if (isProcessSessionLongTaskManaged(run.session.id)) {
+          cancelLongTaskByProcessSession(run.session.id, "aborted");
+          return;
+        }
         if (yielded || run.session.backgrounded) {
           return;
         }
@@ -2036,39 +2081,47 @@ export function createExecTool(
       }
 
       return new Promise<AgentToolResult<ExecToolDetails>>((resolve, reject) => {
-        const resolveRunning = () => {
-          cleanupToolRunListeners();
-          resolve({
-            content: [
-              {
-                type: "text",
-                text: `${getWarningText()}Command still running (session ${run.session.id}, pid ${
-                  run.session.pid ?? "n/a"
-                }). Use process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up.`,
-              },
-            ],
-            details: {
-              // Keep status:"running" for process poll/loop detection consumers.
-              // async:true marks this as background work so incomplete-turn does
-              // not promote a successful yield into an error final (#background-exec).
-              async: true,
-              status: "running",
-              sessionId: run.session.id,
-              pid: run.session.pid ?? undefined,
-              startedAt: run.startedAt,
-              cwd: run.session.cwd,
-              tail: run.session.tail,
-            },
-          });
-        };
-
-        const onYieldNow = () => {
+        const startLongTaskSupervisor = () => {
           if (yielded) {
             return;
           }
           yielded = true;
           markBackgrounded(run.session);
-          resolveRunning();
+          run.disableUpdates();
+          // Runtime owns completion; do not enqueue heartbeat/system-event notify.
+          run.session.notifyOnExit = false;
+          run.session.exitNotified = true;
+          const longTaskCfg = resolveLongTaskConfig(defaults?.config);
+          void runLongTaskSupervisor({
+            processSessionId: run.session.id,
+            command: params.command,
+            exitPromise: run.promise,
+            kill: () => run.kill(),
+            signal,
+            config: longTaskCfg,
+            sessionKey: notifySessionKey ?? defaults?.sessionKey,
+            agentId,
+            pid: run.session.pid,
+            startedAt: run.startedAt,
+          })
+            .then((folded) => {
+              cleanupToolRunListeners();
+              resolve(
+                buildFoldedLongTaskExecResult({
+                  result: folded,
+                  cwd: run.session.cwd,
+                  warningText: getWarningText(),
+                }),
+              );
+            })
+            .catch((err: unknown) => {
+              cleanupToolRunListeners();
+              reject(err as Error);
+            });
+        };
+
+        const onYieldNow = () => {
+          startLongTaskSupervisor();
         };
 
         if (allowBackground && yieldWindow !== null) {
@@ -2076,12 +2129,7 @@ export function createExecTool(
             onYieldNow();
           } else {
             yieldTimer = setTimeout(() => {
-              if (yielded) {
-                return;
-              }
-              yielded = true;
-              markBackgrounded(run.session);
-              resolveRunning();
+              onYieldNow();
             }, yieldWindow);
           }
         }

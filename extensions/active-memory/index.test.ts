@@ -1730,6 +1730,8 @@ describe("active-memory plugin", () => {
         "pdf",
         "process",
         "session_status",
+        "tasks_status",
+        "tasks_list",
         "sessions_history",
         "sessions_list",
         "sessions_send",

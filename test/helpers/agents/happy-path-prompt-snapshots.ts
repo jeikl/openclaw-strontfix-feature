@@ -65,6 +65,8 @@ const HAPPY_PATH_TOOL_NAMES = new Set([
   "sessions_yield",
   "subagents",
   "session_status",
+  "tasks_status",
+  "tasks_list",
   "web_search",
   "web_fetch",
 ]);

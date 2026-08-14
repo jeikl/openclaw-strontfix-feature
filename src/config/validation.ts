@@ -53,6 +53,7 @@ import {
   collectChannelSchemaMetadataWithOwnership,
 } from "./channel-config-metadata.js";
 import { shouldSuppressMissingCodexPluginDiagnostics } from "./codex-plugin-diagnostics.js";
+import { findLegacyConfigIssues } from "./legacy.js";
 import { materializeRuntimeConfig } from "./materialize.js";
 import type { OpenClawConfig, ConfigValidationIssue } from "./types.js";
 import { coerceSecretRef } from "./types.secrets.js";
@@ -1038,6 +1039,92 @@ function validateGatewayTailscaleAuth(config: OpenClawConfig): ConfigValidationI
  * Validates config without applying runtime defaults.
  * Use this when you need the raw validated config (e.g., for writing back to file).
  */
+type ValidateConfigObjectSuccess = {
+  ok: true;
+  config: OpenClawConfig;
+  warnings?: ConfigValidationIssue[];
+};
+
+function isUnrecognizedKeysZodIssue(
+  issue: unknown,
+): issue is { code: "unrecognized_keys"; path: unknown; keys: PropertyKey[] } {
+  const record = toIssueRecord(issue);
+  return record?.code === "unrecognized_keys" && Array.isArray(record.keys);
+}
+
+function resolveMutableConfigObject(
+  root: unknown,
+  segments: readonly ConfigPathSegment[],
+): Record<string, unknown> | null {
+  let current: unknown = root;
+  for (const part of segments) {
+    if (typeof part === "number") {
+      if (!Array.isArray(current)) {
+        return null;
+      }
+      current = current[part];
+      continue;
+    }
+    if (!isRecord(current)) {
+      return null;
+    }
+    current = current[part];
+  }
+  return isRecord(current) && !Array.isArray(current) ? current : null;
+}
+
+function isLegacyConfigPath(pathScoped: string, legacyPaths: readonly string[]): boolean {
+  return legacyPaths.some(
+    (legacy) =>
+      Boolean(legacy) &&
+      (pathScoped === legacy ||
+        pathScoped.startsWith(`${legacy}.`) ||
+        legacy.startsWith(`${pathScoped}.`)),
+  );
+}
+
+function stripUnrecognizedKeysFromRaw(
+  raw: unknown,
+  issues: readonly unknown[],
+  legacyPaths: readonly string[] = [],
+): { raw: unknown; removed: string[] } {
+  if (!isRecord(raw)) {
+    return { raw, removed: [] };
+  }
+  const next = structuredClone(raw);
+  const removed: string[] = [];
+  for (const issue of issues) {
+    if (!isUnrecognizedKeysZodIssue(issue)) {
+      continue;
+    }
+    const segments = toConfigPathSegments(issue.path);
+    const target = resolveMutableConfigObject(next, segments);
+    if (!target) {
+      continue;
+    }
+    for (const key of issue.keys) {
+      if (typeof key !== "string" || !(key in target)) {
+        continue;
+      }
+      const pathScoped = formatConfigPath([...segments, key]);
+      if (isLegacyConfigPath(pathScoped, legacyPaths)) {
+        continue;
+      }
+      delete target[key];
+      removed.push(pathScoped);
+    }
+  }
+  return { raw: next, removed };
+}
+
+function formatIgnoredUnknownKeyWarning(pathScoped: string): ConfigValidationIssue {
+  return {
+    path: pathScoped,
+    message:
+      "Unrecognized key for this OpenClaw version; ignored at runtime. The config file was not modified.",
+  };
+}
+
 export function validateConfigObjectRaw(
   raw: unknown,
   opts?: {
@@ -1046,13 +1133,36 @@ export function validateConfigObjectRaw(
     validateBundledChannels?: boolean;
     preservedLegacyRootKeys?: readonly string[];
   },
-): { ok: true; config: OpenClawConfig } | { ok: false; issues: ConfigValidationIssue[] } {
+): ValidateConfigObjectSuccess | { ok: false; issues: ConfigValidationIssue[] } {
   const normalizedRaw = stripPreservedLegacyRootKeysForValidation(
     stripDeprecatedValidationKeys(raw),
     opts?.preservedLegacyRootKeys,
   );
   const policyIssues = collectUnsupportedSecretRefPolicyIssues(normalizedRaw);
-  const validated = OpenClawSchema.safeParse(normalizedRaw);
+  const firstParsed = OpenClawSchema.safeParse(normalizedRaw);
+  let validated = firstParsed;
+  let ignoredKeyWarnings: ConfigValidationIssue[] = [];
+  if (!firstParsed.success) {
+    const legacyPaths = findLegacyConfigIssues(normalizedRaw, opts?.sourceRaw).map(
+      (issue) => issue.path,
+    );
+    const stripped = stripUnrecognizedKeysFromRaw(
+      normalizedRaw,
+      firstParsed.error.issues,
+      legacyPaths,
+    );
+    if (stripped.removed.length > 0) {
+      const retried = OpenClawSchema.safeParse(stripped.raw);
+      if (retried.success) {
+        validated = retried;
+        ignoredKeyWarnings = stripped.removed.map((pathScoped) =>
+          formatIgnoredUnknownKeyWarning(pathScoped),
+        );
+      } else {
+        validated = retried;
+      }
+    }
+  }
   if (!validated.success) {
     const schemaIssues = validated.error.issues.map((issue) => mapZodIssueToConfigIssue(issue));
     return {
@@ -1101,6 +1211,7 @@ export function validateConfigObjectRaw(
   return {
     ok: true,
     config: validatedConfig,
+    ...(ignoredKeyWarnings.length > 0 ? { warnings: ignoredKeyWarnings } : {}),
   };
 }
 
@@ -1187,6 +1298,7 @@ function validateConfigObjectWithPluginsBase(
   if (!base.ok) {
     return { ok: false, issues: base.issues, warnings: [] };
   }
+  const ignoredKeyWarnings = base.warnings ?? [];
 
   let registryInfo: RegistryInfo | null = opts.pluginMetadataSnapshot
     ? { registry: opts.pluginMetadataSnapshot.manifestRegistry }
@@ -1206,12 +1318,12 @@ function validateConfigObjectWithPluginsBase(
     return {
       ok: true,
       config,
-      warnings: [],
+      warnings: ignoredKeyWarnings,
     };
   }
 
   const issues: ConfigValidationIssue[] = [];
-  const warnings: ConfigValidationIssue[] = [];
+  const warnings: ConfigValidationIssue[] = [...ignoredKeyWarnings];
   const hasExplicitPluginsConfig = isRecord(raw) && Object.hasOwn(raw, "plugins");
   const explicitPluginReferences = collectExplicitPluginReferences(raw);
 

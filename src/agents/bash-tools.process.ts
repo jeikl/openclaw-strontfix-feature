@@ -18,6 +18,7 @@ import {
   listRunningSessions,
   markExited,
   setJobTtlMs,
+  waitForSessionExit,
 } from "./bash-process-registry.js";
 import { describeProcessTool } from "./bash-tools.descriptions.js";
 import {
@@ -35,6 +36,7 @@ import {
   truncateMiddle,
 } from "./bash-tools.shared.js";
 import { recordCommandPoll, resetCommandPollCount } from "./command-poll-backoff.js";
+import { isProcessSessionLongTaskManaged } from "./long-task-runtime.js";
 import { encodePaste } from "./pty-keys.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { PROCESS_TOOL_DISPLAY_SUMMARY } from "./tool-description-presets.js";
@@ -151,33 +153,6 @@ function createAbortError(reason: unknown): Error {
     return reason;
   }
   return createNamedAbortError(typeof reason === "string" ? reason : "Aborted");
-}
-
-async function sleepPollInterval(ms: number, signal?: AbortSignal): Promise<void> {
-  if (signal?.aborted) {
-    throw createAbortError(signal.reason);
-  }
-  await new Promise<void>((resolve, reject) => {
-    const cleanup = () => {
-      if (timer) {
-        clearTimeout(timer);
-      }
-      if (onAbort) {
-        signal?.removeEventListener("abort", onAbort);
-      }
-    };
-    const onResolve = () => {
-      cleanup();
-      resolve();
-    };
-    const onAbort: (() => void) | undefined = () => {
-      cleanup();
-      reject(createAbortError(signal?.reason));
-    };
-    const timer: ReturnType<typeof setTimeout> | undefined = setTimeout(onResolve, ms);
-    timer.unref?.();
-    signal?.addEventListener("abort", onAbort, { once: true });
-  });
 }
 
 /** Build the process-control tool with optional cleanup, scope, and input-idle defaults. */
@@ -381,6 +356,11 @@ export function createProcessTool(
 
       switch (params.action) {
         case "poll": {
+          if (isProcessSessionLongTaskManaged(params.sessionId)) {
+            return failText(
+              `Session ${params.sessionId} is owned by the long-task runtime. Waiting is handled internally; do not process poll. Use tasks_status or /status to inspect.`,
+            );
+          }
           if (!scopedSession) {
             if (scopedFinished) {
               resetPollRetrySuggestion(params.sessionId);
@@ -431,9 +411,9 @@ export function createProcessTool(
           }
           const pollWaitMs = resolvePollWaitMs(params.timeout);
           if (pollWaitMs > 0 && !scopedSession.exited) {
-            const deadline = Date.now() + pollWaitMs;
-            while (!scopedSession.exited && Date.now() < deadline) {
-              await sleepPollInterval(Math.max(0, Math.min(250, deadline - Date.now())), signal);
+            const waited = await waitForSessionExit(scopedSession.id, pollWaitMs, signal);
+            if (waited === "abort") {
+              throw createAbortError(signal?.reason);
             }
           }
           const { stdout, stderr } = drainSession(scopedSession);

@@ -325,6 +325,16 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       title: "Session Status",
       detailKeys: ["sessionKey", "model"],
     },
+    tasks_status: {
+      emoji: "📌",
+      title: "Task Status",
+      detailKeys: ["taskId", "sessionKey"],
+    },
+    tasks_list: {
+      emoji: "📌",
+      title: "Task List",
+      detailKeys: ["sessionKey", "includeTerminal"],
+    },
     sessions_list: {
       emoji: "🗂️",
       title: "Sessions",

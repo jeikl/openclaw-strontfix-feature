@@ -1,10 +1,9 @@
 /**
  * Exec background abort tests.
- * Ensures agent-turn aborts stop foreground execs but do not kill already
- * backgrounded sessions.
+ * Long-task park owns waiting: abort cancels the waiter and kills the process.
+ * Process timeout still applies after yield.
  */
 import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
-import { killProcessTree } from "../process/kill-tree.js";
 
 const supervisorMockState = vi.hoisted(() => ({
   cancelReasons: [] as Array<"manual-cancel" | "overall-timeout">,
@@ -97,8 +96,6 @@ const TEST_EXEC_DEFAULTS = {
 };
 
 let createExecTool: typeof import("./bash-tools.exec.js").createExecTool;
-let getFinishedSession: typeof import("./bash-process-registry.js").getFinishedSession;
-let getSession: typeof import("./bash-process-registry.js").getSession;
 let resetProcessRegistryForTests: typeof import("./bash-process-registry.js").resetProcessRegistryForTests;
 type ExecToolExecuteParams = Parameters<ReturnType<typeof createExecTool>["execute"]>[1];
 
@@ -108,8 +105,7 @@ const createTestExecTool = (
 
 beforeAll(async () => {
   ({ createExecTool } = await import("./bash-tools.exec.js"));
-  ({ getFinishedSession, getSession, resetProcessRegistryForTests } =
-    await import("./bash-process-registry.js"));
+  ({ resetProcessRegistryForTests } = await import("./bash-process-registry.js"));
 });
 
 beforeEach(() => {
@@ -122,61 +118,25 @@ afterEach(() => {
   resetProcessRegistryForTests();
 });
 
-async function waitForFinishedSession(sessionId: string) {
-  let finished = getFinishedSession(sessionId);
-  await expect
-    .poll(
-      () => {
-        finished = getFinishedSession(sessionId);
-        return Boolean(finished);
-      },
-      {
-        timeout: FINISHED_WAIT_TIMEOUT_MS,
-        interval: POLL_INTERVAL_MS,
-      },
-    )
-    .toBe(true);
-  return finished;
-}
-
-function cleanupRunningSession(sessionId: string) {
-  const running = getSession(sessionId);
-  const pid = running?.pid;
-  if (pid) {
-    killProcessTree(pid);
-  }
-  return running;
-}
-
-async function expectBackgroundSessionSurvivesAbort(params: {
+async function expectBackgroundSessionAbortCancels(params: {
   tool: ReturnType<typeof createExecTool>;
   executeParams: ExecToolExecuteParams;
 }) {
   const abortController = new AbortController();
-  const result = await params.tool.execute(
-    "toolcall",
-    params.executeParams,
-    abortController.signal,
-  );
-  expect(result.details.status).toBe("running");
-  const sessionId = (result.details as { sessionId: string }).sessionId;
-
+  const pending = params.tool.execute("toolcall", params.executeParams, abortController.signal);
+  await expect
+    .poll(() => supervisorMockState.spawnInputs.length > 0, {
+      timeout: FINISHED_WAIT_TIMEOUT_MS,
+      interval: POLL_INTERVAL_MS,
+    })
+    .toBe(true);
   abortController.abort();
   if (ABORT_SETTLE_MS > 0) {
     await new Promise((resolve) => {
       setTimeout(resolve, ABORT_SETTLE_MS);
     });
   }
-
-  const running = getSession(sessionId);
-  const finished = getFinishedSession(sessionId);
-  try {
-    expect(supervisorMockState.cancelReasons).toStrictEqual([]);
-    expect(finished).toBeUndefined();
-    expect(running?.exited).toBe(false);
-  } finally {
-    cleanupRunningSession(sessionId);
-  }
+  await expect(pending).rejects.toMatchObject({ name: "AbortError" });
 }
 
 async function expectBackgroundSessionTimesOut(params: {
@@ -188,9 +148,13 @@ async function expectBackgroundSessionTimesOut(params: {
 }) {
   const abortController = new AbortController();
   const signal = params.signal ?? abortController.signal;
-  const result = await params.tool.execute("toolcall", params.executeParams, signal);
-  expect(result.details.status).toBe("running");
-  const sessionId = (result.details as { sessionId: string }).sessionId;
+  const pending = params.tool.execute("toolcall", params.executeParams, signal);
+  await expect
+    .poll(() => supervisorMockState.spawnInputs.length > 0, {
+      timeout: FINISHED_WAIT_TIMEOUT_MS,
+      interval: POLL_INTERVAL_MS,
+    })
+    .toBe(true);
   if (typeof params.expectedTimeoutSec === "number") {
     expect(supervisorMockState.spawnInputs.at(-1)?.timeoutMs).toBe(
       Math.floor(params.expectedTimeoutSec * 1000),
@@ -199,27 +163,25 @@ async function expectBackgroundSessionTimesOut(params: {
 
   if (params.abortAfterStart) {
     abortController.abort();
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    return;
   }
 
-  const finished = await waitForFinishedSession(sessionId);
-  try {
-    expect(finished?.status).toBe("failed");
-  } finally {
-    cleanupRunningSession(sessionId);
-  }
+  const result = await pending;
+  expect(result.details.status === "failed" || result.details.timedOut === true).toBe(true);
 }
 
-test("background exec is not killed when tool signal aborts", async () => {
+test("background exec is cancelled when tool signal aborts", async () => {
   const tool = createTestExecTool({ allowBackground: true, backgroundMs: 0 });
-  await expectBackgroundSessionSurvivesAbort({
+  await expectBackgroundSessionAbortCancels({
     tool,
     executeParams: { command: BACKGROUND_HOLD_CMD, background: true },
   });
 });
 
-test("pty background exec is not killed when tool signal aborts", async () => {
+test("pty background exec is cancelled when tool signal aborts", async () => {
   const tool = createTestExecTool({ allowBackground: true, backgroundMs: 0 });
-  await expectBackgroundSessionSurvivesAbort({
+  await expectBackgroundSessionAbortCancels({
     tool,
     executeParams: { command: BACKGROUND_HOLD_CMD, background: true, pty: true },
   });
@@ -258,18 +220,25 @@ test("background exec with timeout zero bypasses default timeout", async () => {
     backgroundMs: 0,
     timeoutSec: BACKGROUND_TIMEOUT_SEC,
   });
-  const result = await tool.execute("toolcall", {
-    command: BACKGROUND_HOLD_CMD,
-    background: true,
-    timeout: 0,
-  });
-  expect(result.details.status).toBe("running");
-  const sessionId = (result.details as { sessionId: string }).sessionId;
+  const abortController = new AbortController();
+  const pending = tool.execute(
+    "toolcall",
+    {
+      command: BACKGROUND_HOLD_CMD,
+      background: true,
+      timeout: 0,
+    },
+    abortController.signal,
+  );
+  await expect
+    .poll(() => supervisorMockState.spawnInputs.length > 0, {
+      timeout: FINISHED_WAIT_TIMEOUT_MS,
+      interval: POLL_INTERVAL_MS,
+    })
+    .toBe(true);
   expect(supervisorMockState.spawnInputs.at(-1)?.timeoutMs).toBeUndefined();
-  expect(getFinishedSession(sessionId)).toBeUndefined();
-  expect(getSession(sessionId)?.exited).toBe(false);
-
-  cleanupRunningSession(sessionId);
+  abortController.abort();
+  await expect(pending).rejects.toMatchObject({ name: "AbortError" });
 });
 
 test("yielded background exec still times out", async () => {

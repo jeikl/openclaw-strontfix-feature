@@ -592,6 +592,30 @@ export type MemorySearchConfig = {
   };
 };
 
+/** Runtime-owned long-task park / short-poll / retention settings. */
+export type LongTaskRetentionConfig = {
+  /** Keep succeeded records this long (ms). Default 7d. */
+  succeededMs?: number;
+  /** Keep failed / timed_out / cancelled records this long (ms). Default 7d. */
+  failedMs?: number;
+  /** Keep lost records this long (ms). Default 24h. */
+  lostMs?: number;
+  /** Keep full output blobs this long (ms). Default 3d. */
+  outputMs?: number;
+};
+
+export type LongTaskConfig = {
+  /** Internal short-poll slices before long_running. Default 4. Not model tool calls. */
+  shortPolls?: number;
+  /** Max wait per short-poll slice (ms). Default 10000. */
+  shortPollTimeoutMs?: number;
+  /** Event-driven park cap (ms). Default 1800000 (30m). */
+  maxWaitMs?: number;
+  /** Refuse end_turn while a long task is running. Default true. */
+  blockEndTurn?: boolean;
+  retention?: LongTaskRetentionConfig;
+};
+
 export type ToolsConfig = {
   /** Base tool profile applied before allow/deny lists. */
   profile?: ToolProfileId;
@@ -717,6 +741,8 @@ export type ToolsConfig = {
   };
   /** Exec tool defaults. */
   exec?: ExecToolConfig;
+  /** Runtime long-task state machine (short poll + park + retention). */
+  longTask?: LongTaskConfig;
   /** Filesystem tool path guards. */
   fs?: FsToolsConfig;
   /** Runtime loop detection for repetitive/ stuck tool-call patterns. */

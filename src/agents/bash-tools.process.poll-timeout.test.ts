@@ -13,9 +13,11 @@ import {
 import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
 import { createProcessTool } from "./bash-tools.process.js";
 import { processSchema } from "./bash-tools.schemas.js";
+import { resetLongTaskRuntimeForTests, runLongTaskSupervisor } from "./long-task-runtime.js";
 
 afterEach(() => {
   resetProcessRegistryForTests();
+  resetLongTaskRuntimeForTests();
   resetDiagnosticSessionStateForTest();
 });
 
@@ -67,7 +69,7 @@ async function expectCompletedPollWithTimeout(params: {
     setTimeout(() => {
       appendOutput(session, "stdout", "done\n");
       markExited(session, 0, null, "completed");
-    }, 10);
+    }, 50);
 
     const pollPromise = pollSession(processTool, params.callId, params.sessionId, params.timeout);
     if (params.assertUnresolvedAtMs !== undefined) {
@@ -94,8 +96,8 @@ test("process poll waits for completion when timeout is provided", async () => {
     sessionId: "sess",
     callId: "toolcall",
     timeout: 2000,
-    assertUnresolvedAtMs: 200,
-    advanceMs: 100,
+    assertUnresolvedAtMs: 20,
+    advanceMs: 50,
   });
 });
 
@@ -227,4 +229,31 @@ test("process poll exposes finished-session termination metadata", async () => {
   expect(details.timedOut).toBe(true);
   expect(details.noOutputTimedOut).toBe(true);
   expect(details.aggregated).toContain("terminated");
+});
+
+test("process poll refuses sessions owned by the long-task runtime", async () => {
+  const sessionId = "sess-managed";
+  const { processTool } = createProcessSessionHarness(sessionId);
+  const pending = runLongTaskSupervisor({
+    processSessionId: sessionId,
+    command: "sleep 30",
+    exitPromise: new Promise(() => {}),
+    kill: () => {},
+    config: {
+      shortPolls: 4,
+      shortPollTimeoutMs: 200,
+      maxWaitMs: 5_000,
+      blockEndTurn: true,
+      retention: { succeededMs: 1_000, failedMs: 1_000, lostMs: 1_000, outputMs: 1_000 },
+    },
+    sessionKey: "agent:main:managed",
+  });
+  const poll = await pollSession(processTool, "toolcall-managed", sessionId);
+  expect(poll.details).toMatchObject({ status: "failed" });
+  expect(poll.content[0]).toMatchObject({
+    type: "text",
+    text: expect.stringContaining("owned by the long-task runtime"),
+  });
+  resetLongTaskRuntimeForTests();
+  await pending.catch(() => undefined);
 });

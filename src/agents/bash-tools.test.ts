@@ -4,18 +4,12 @@
  */
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { drainFormattedSystemEvents } from "../auto-reply/reply/session-system-events.js";
-import type { OpenClawConfig } from "../config/config.js";
 import {
   resetHeartbeatWakeStateForTests,
   setHeartbeatWakeHandler,
 } from "../infra/heartbeat-wake.js";
 import { applyPathPrepend, findPathKey } from "../infra/path-prepend.js";
-import {
-  peekSystemEventEntries,
-  peekSystemEvents,
-  resetSystemEventsForTest,
-} from "../infra/system-events.js";
+import { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-events.js";
 import { captureEnv } from "../test-utils/env.js";
 import {
   addSession,
@@ -27,6 +21,7 @@ import {
   type ProcessSession,
 } from "./bash-process-registry.js";
 import { createExecTool, createProcessTool } from "./bash-tools.js";
+import { resetLongTaskRuntimeForTests } from "./long-task-runtime.js";
 import { resolveShellFromPath, sanitizeBinaryOutput } from "./shell-utils.js";
 
 vi.mock("../infra/channel-summary.js", () => ({
@@ -247,13 +242,8 @@ const defaultShell = isWin
 const shortDelayCmd = isWin ? "Start-Sleep -Milliseconds 4" : "sleep 0.004";
 const POLL_INTERVAL_MS = isWin ? 15 : 2;
 const BACKGROUND_POLL_TIMEOUT_MS = isWin ? 8000 : 1200;
-const NOTIFY_EVENT_TIMEOUT_MS = isWin ? 12_000 : 5_000;
 const BACKGROUND_POLL_OPTIONS = {
   timeout: BACKGROUND_POLL_TIMEOUT_MS,
-  interval: POLL_INTERVAL_MS,
-};
-const NOTIFY_POLL_OPTIONS = {
-  timeout: NOTIFY_EVENT_TIMEOUT_MS,
   interval: POLL_INTERVAL_MS,
 };
 const SHELL_ENV_KEYS = ["OPENCLAW_EXEC_SHELL_SNAPSHOT", "SHELL"] as const;
@@ -263,7 +253,6 @@ const PROCESS_STATUS_COMPLETED = "completed";
 const PROCESS_STATUS_FAILED = "failed";
 const OUTPUT_DONE = "done";
 const OUTPUT_NOPE = "nope";
-const OUTPUT_EXEC_COMPLETED = "Exec completed";
 const OUTPUT_EXIT_CODE_1 = "Command exited with code 1";
 const shellEcho = (message: string) => (isWin ? `Write-Output ${message}` : `echo ${message}`);
 const COMMAND_NOOP = isWin ? "$null" : ":";
@@ -281,7 +270,6 @@ const DEFAULT_NOTIFY_SESSION_KEY = "agent:main:main";
 const ECHO_HI_COMMAND = shellEcho("hi");
 let callIdCounter = 0;
 const nextCallId = () => `call${++callIdCounter}`;
-const notifyCfg = {} as OpenClawConfig;
 type ExecToolInstance = ReturnType<typeof createExecTool>;
 type ProcessToolInstance = ReturnType<typeof createProcessTool>;
 type ExecToolArgs = Parameters<ExecToolInstance["execute"]>[1];
@@ -409,17 +397,6 @@ function useCapturedEnv(keys: string[], afterCapture?: () => void) {
   });
 }
 
-async function waitForCompletion(sessionId: string) {
-  let status = PROCESS_STATUS_RUNNING;
-  await expect
-    .poll(async () => {
-      status = (await pollProcessSession({ tool: processTool, sessionId })).status;
-      return status;
-    }, BACKGROUND_POLL_OPTIONS)
-    .not.toBe(PROCESS_STATUS_RUNNING);
-  return status;
-}
-
 function requireSessionId(details: { sessionId?: string }): string {
   if (!details.sessionId) {
     throw new Error("expected sessionId in exec result details");
@@ -430,62 +407,6 @@ const requireRunningSessionId = (result: { details: unknown }) => {
   expect(readProcessStatus(result.details)).toBe(PROCESS_STATUS_RUNNING);
   return requireSessionId(result.details as { sessionId?: string });
 };
-
-function hasNotifyEventForPrefix(prefix: string, sessionKey = DEFAULT_NOTIFY_SESSION_KEY): boolean {
-  return peekSystemEvents(sessionKey).some((event) => event.includes(prefix));
-}
-
-async function waitForNotifyEvent(sessionId: string, sessionKey = DEFAULT_NOTIFY_SESSION_KEY) {
-  const prefix = sessionId.slice(0, 8);
-  let finished = getFinishedSession(sessionId);
-  let hasEvent = hasNotifyEventForPrefix(prefix, sessionKey);
-  await expect
-    .poll(() => {
-      finished = getFinishedSession(sessionId);
-      hasEvent = hasNotifyEventForPrefix(prefix, sessionKey);
-      return Boolean(finished && hasEvent);
-    }, NOTIFY_POLL_OPTIONS)
-    .toBe(true);
-  return {
-    finished: finished ?? getFinishedSession(sessionId),
-    hasEvent: hasEvent || hasNotifyEventForPrefix(prefix),
-  };
-}
-
-async function startBackgroundCommand(tool: ExecToolInstance, command: string) {
-  const result = await executeExecCommand(tool, command, { background: true });
-  return requireRunningSessionId(result);
-}
-
-async function expectNotifyOnExitWake(tool: ExecToolInstance, expected: Record<string, unknown>) {
-  const wakeHandler = vi.fn().mockResolvedValue({ status: "skipped", reason: "disabled" });
-  const dispose = setHeartbeatWakeHandler(
-    wakeHandler as unknown as Parameters<typeof setHeartbeatWakeHandler>[0],
-  );
-  try {
-    await startBackgroundCommand(tool, shellEcho("notify"));
-    await expect
-      .poll(() => wakeHandler.mock.calls.at(0)?.[0], NOTIFY_POLL_OPTIONS)
-      .toEqual(expected);
-  } finally {
-    dispose();
-  }
-}
-
-async function drainNotifyEvents(sessionKey = DEFAULT_NOTIFY_SESSION_KEY) {
-  return await drainFormattedSystemEvents({
-    cfg: notifyCfg,
-    sessionKey,
-    isMainSession: false,
-    isNewSession: false,
-  });
-}
-
-async function runBackgroundCommandToCompletion(tool: ExecToolInstance, command: string) {
-  const sessionId = await startBackgroundCommand(tool, command);
-  const status = await waitForCompletion(sessionId);
-  return { sessionId, status };
-}
 
 type ProcessLogWindow = { offset?: number; limit?: number };
 async function readProcessLog(sessionId: string, options: ProcessLogWindow = {}) {
@@ -592,20 +513,6 @@ const LONG_LOG_EXPECTATION_CASES: LongLogExpectationCase[] = [
     mustNotContain: ["showing last 200"],
   }),
 ];
-const expectNotifyNoopEvents = (
-  events: string[],
-  expectNotification: boolean,
-  sessionId: string,
-  label: string,
-) => {
-  if (!expectNotification) {
-    expect(events, label).toStrictEqual([]);
-    return;
-  }
-  expect(events, label).toStrictEqual([
-    `${OUTPUT_EXEC_COMPLETED} (${sessionId.slice(0, 8)}, code 0)`,
-  ]);
-};
 const runDisallowedElevationCase = async ({
   defaultLevel,
   overrides,
@@ -694,14 +601,6 @@ const runLongLogExpectationCase = async ({
   expectTextContainsValues(snapshot.text, mustContain, true);
   expectTextContainsValues(snapshot.text, mustNotContain, false);
 };
-const runNotifyNoopCase = async ({ label, defaults, expectNotification }: NotifyNoopCase) => {
-  const tool = createNotifyOnExitExecTool(defaults);
-
-  const { sessionId, status } = await runBackgroundCommandToCompletion(tool, COMMAND_NOOP);
-  expect(status).toBe(PROCESS_STATUS_COMPLETED);
-  const events = peekSystemEvents(DEFAULT_NOTIFY_SESSION_KEY);
-  expectNotifyNoopEvents(events, expectNotification, sessionId, label);
-};
 
 describe("tool descriptions", () => {
   it("adds cron-specific deferred follow-up guidance only when cron is available", () => {
@@ -709,13 +608,13 @@ describe("tool descriptions", () => {
     const processWithCron = createProcessTool({ hasCronTool: true });
 
     expect(execWithCron.description).toContain(
-      "rely on automatic completion wake when it is enabled and the command emits output or fails; otherwise use process to confirm completion. Use process whenever you need logs, status, input, or intervention.",
+      "The runtime waits for long commands internally (short polls, then event park)",
     );
     expect(processWithCron.description).toContain(
-      "completion confirmation when automatic completion wake is unavailable.",
+      "Do not poll a session owned by the long-task runtime.",
     );
     expect(processWithCron.description).toContain(
-      "Use write/send-keys/submit/paste/kill for input or intervention.",
+      "Use log/write/send-keys/submit/paste/kill for output or intervention.",
     );
     expect(execWithCron.description).toContain(
       "Do not use exec sleep or delay loops for reminders or deferred follow-ups; use cron instead.",
@@ -725,12 +624,12 @@ describe("tool descriptions", () => {
     );
     expect(execTool.description).not.toContain("use cron instead");
     expect(processTool.description).not.toContain("scheduled follow-ups");
-    expect(execTool.description).toContain("otherwise use process to confirm completion");
+    expect(execTool.description).toContain("Do not process-poll to wait");
     expect(processTool.description).toContain(
-      "completion confirmation when automatic completion wake is unavailable",
+      "Do not poll a session owned by the long-task runtime",
     );
     expect(processTool.description).toContain(
-      "Use write/send-keys/submit/paste/kill for input or intervention.",
+      "Use log/write/send-keys/submit/paste/kill for output or intervention.",
     );
   });
 });
@@ -738,6 +637,7 @@ describe("tool descriptions", () => {
 beforeEach(() => {
   callIdCounter = 0;
   resetProcessRegistryForTests();
+  resetLongTaskRuntimeForTests();
   resetSystemEventsForTest();
 });
 
@@ -772,11 +672,10 @@ describe("exec tool backgrounding", () => {
   );
 
   it("supports explicit background and derives session name from the command", async () => {
-    const sessionId = await startBackgroundCommand(execTool, COMMAND_ECHO_HELLO);
-
-    const sessions = await listProcessSessions(processTool);
-    expect(hasSession(sessions, sessionId)).toBe(true);
-    expect(sessions.find((s) => s.sessionId === sessionId)?.name).toBe(COMMAND_ECHO_HELLO);
+    const result = await executeExecCommand(execTool, COMMAND_ECHO_HELLO, { background: true });
+    expect(readProcessStatus(result.details)).toBe(PROCESS_STATUS_COMPLETED);
+    expect(readTextContent(result.content) ?? "").toContain("hello");
+    expect((result.details as { folded?: boolean }).folded).toBe(true);
   });
 
   it.each<DisallowedElevationCase>(DISALLOWED_ELEVATION_CASES)(
@@ -793,19 +692,29 @@ describe("exec tool backgrounding", () => {
   it("scopes process sessions by scopeKey", async () => {
     const alphaTools = createScopedToolSet(SCOPE_KEY_ALPHA);
     const betaTools = createScopedToolSet(SCOPE_KEY_BETA);
-
-    const sessionA = await startBackgroundCommand(alphaTools.exec, shortDelayCmd);
-    const sessionB = await startBackgroundCommand(betaTools.exec, shortDelayCmd);
-
-    const sessionsA = await listProcessSessions(alphaTools.process);
-    expect(hasSession(sessionsA, sessionA)).toBe(true);
-    expect(hasSession(sessionsA, sessionB)).toBe(false);
-
-    const pollB = await pollProcessSession({
-      tool: betaTools.process,
-      sessionId: sessionA,
-    });
-    expect(pollB.status).toBe(PROCESS_STATUS_FAILED);
+    const holdCmd = isWin ? "Start-Sleep -Seconds 5" : "sleep 5";
+    const pendingA = executeExecCommand(alphaTools.exec, holdCmd, { background: true });
+    const pendingB = executeExecCommand(betaTools.exec, holdCmd, { background: true });
+    try {
+      await expect
+        .poll(async () => (await listProcessSessions(alphaTools.process)).length > 0, {
+          interval: 10,
+          timeout: 2_000,
+        })
+        .toBe(true);
+      const sessionsA = await listProcessSessions(alphaTools.process);
+      const sessionsB = await listProcessSessions(betaTools.process);
+      expect(sessionsA.length).toBeGreaterThan(0);
+      expect(sessionsB.length).toBeGreaterThan(0);
+      expect(
+        sessionsA.some((session) =>
+          sessionsB.some((other) => other.sessionId === session.sessionId),
+        ),
+      ).toBe(false);
+    } finally {
+      resetLongTaskRuntimeForTests();
+      await Promise.allSettled([pendingA, pendingB]);
+    }
   });
 });
 
@@ -836,65 +745,37 @@ describe("exec notifyOnExit", () => {
     resetHeartbeatWakeStateForTests();
   });
 
-  it("enqueues a system event when a backgrounded exec exits", async () => {
+  it("returns a folded tool result instead of enqueueing a heartbeat system event", async () => {
     const tool = createNotifyOnExitExecTool();
+    const result = await executeExecCommand(tool, shellEcho("notify"), { background: true });
+    expect(readProcessStatus(result.details)).toBe(PROCESS_STATUS_COMPLETED);
+    expect((result.details as { folded?: boolean }).folded).toBe(true);
+    expect(readTextContent(result.content) ?? "").toContain("status: succeeded");
+    expect(peekSystemEvents(DEFAULT_NOTIFY_SESSION_KEY)).toEqual([]);
+  });
 
-    const sessionId = await startBackgroundCommand(tool, shellEcho("notify"));
-
-    const { finished, hasEvent } = await waitForNotifyEvent(sessionId);
-    const queuedEvent = peekSystemEventEntries(DEFAULT_NOTIFY_SESSION_KEY).find((event) =>
-      event.text.includes(sessionId.slice(0, 8)),
+  it("does not wake heartbeat for long-task owned exec completions", async () => {
+    const wakeHandler = vi.fn().mockResolvedValue({ status: "skipped", reason: "disabled" });
+    const dispose = setHeartbeatWakeHandler(
+      wakeHandler as unknown as Parameters<typeof setHeartbeatWakeHandler>[0],
     );
-    const formatted = await drainNotifyEvents();
-
-    expect(finished?.id).toBe(sessionId);
-    expect(finished?.status).toBe(PROCESS_STATUS_COMPLETED);
-    expect(finished?.exitCode).toBe(0);
-    expect(hasEvent).toBe(true);
-    expect(queuedEvent).toBeDefined();
-    expect(formatted).toBeUndefined();
+    try {
+      const result = await executeExecCommand(createNotifyOnExitExecTool(), shellEcho("notify"), {
+        background: true,
+      });
+      expect((result.details as { folded?: boolean }).folded).toBe(true);
+      expect(wakeHandler).not.toHaveBeenCalled();
+    } finally {
+      dispose();
+    }
   });
 
-  it("preserves the origin delivery context on background exec completion events", async () => {
-    const sessionKey = "agent:main:telegram:group:-1003774691294:topic:47";
-    const tool = createNotifyOnExitExecTool({
-      sessionKey,
-      messageProvider: "telegram",
-      currentChannelId: "telegram:-1003774691294:topic:47",
-      currentThreadTs: "47",
-    });
-
-    const sessionId = await startBackgroundCommand(tool, shellEcho("notify"));
-
-    await waitForNotifyEvent(sessionId, sessionKey);
-    const queuedEvent = peekSystemEventEntries(sessionKey).find((event) =>
-      event.text.includes(sessionId.slice(0, 8)),
-    );
-
-    expect(queuedEvent).toBeDefined();
-    expect(queuedEvent?.deliveryContext?.channel).toBe("telegram");
-    expect(queuedEvent?.deliveryContext?.to).toBe("telegram:-1003774691294:topic:47");
-    expect(queuedEvent?.deliveryContext?.threadId).toBe("47");
+  it.each<NotifyNoopCase>(NOOP_NOTIFY_CASES)("$label", async ({ defaults }) => {
+    const tool = createNotifyOnExitExecTool(defaults);
+    const result = await executeExecCommand(tool, COMMAND_NOOP, { background: true });
+    expect(readProcessStatus(result.details)).toBe(PROCESS_STATUS_COMPLETED);
+    expect(peekSystemEvents(DEFAULT_NOTIFY_SESSION_KEY)).toEqual([]);
   });
-
-  it("scopes notifyOnExit heartbeat wake to the exec session key", async () => {
-    await expectNotifyOnExitWake(createNotifyOnExitExecTool(), {
-      source: "exec-event",
-      intent: "event",
-      reason: "exec-event",
-      sessionKey: DEFAULT_NOTIFY_SESSION_KEY,
-    });
-  });
-
-  it("keeps notifyOnExit heartbeat wake unscoped for non-agent session keys", async () => {
-    await expectNotifyOnExitWake(createNotifyOnExitExecTool({ sessionKey: "global" }), {
-      source: "exec-event",
-      intent: "event",
-      reason: "exec-event",
-    });
-  });
-
-  it.each<NotifyNoopCase>(NOOP_NOTIFY_CASES)("$label", runNotifyNoopCase);
 });
 
 describe("exec PATH handling", () => {
@@ -1012,16 +893,11 @@ describe("exec backgrounded onUpdate suppression", () => {
         onUpdateSpy,
       );
 
-      expect(readProcessStatus(result.details)).toBe(PROCESS_STATUS_RUNNING);
-      const sessionId = requireSessionId(result.details as { sessionId?: string });
-      const callsBeforeBackground = onUpdateSpy.mock.calls.length;
-      await expect
-        .poll(() => {
-          const finished = getFinishedSession(sessionId);
-          return Boolean(finished);
-        }, BACKGROUND_POLL_OPTIONS)
-        .toBe(true);
-      expect(onUpdateSpy.mock.calls.length).toBe(callsBeforeBackground);
+      expect(readProcessStatus(result.details)).toBe(PROCESS_STATUS_COMPLETED);
+      expect((result.details as { folded?: boolean }).folded).toBe(true);
+      const callsAtReturn = onUpdateSpy.mock.calls.length;
+      await waitOneTurn();
+      expect(onUpdateSpy.mock.calls.length).toBe(callsAtReturn);
     },
     isWin ? 15_000 : 5_000,
   );
@@ -1071,7 +947,7 @@ describe("exec backgrounded onUpdate suppression", () => {
       vi.fn(),
     );
 
-    expect(readProcessStatus(result.details)).toBe(PROCESS_STATUS_RUNNING);
+    expect(readProcessStatus(result.details)).toBe(PROCESS_STATUS_COMPLETED);
     const abortListener = addListenerSpy.mock.calls.find(([type]) => type === "abort")?.[1];
     expect(abortListener).toBeDefined();
     expect(removeListenerSpy).toHaveBeenCalledWith("abort", abortListener);

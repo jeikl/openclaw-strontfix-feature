@@ -314,6 +314,8 @@ export function applyShellPath(env: Record<string, string>, shellPath?: string |
 }
 
 function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "failed") {
+  // Long-task supervisor returns a folded tool result on the original turn.
+  // Heartbeat/system-event notify is the old broken completion bus.
   if (!session.backgrounded || !session.notifyOnExit || session.exitNotified) {
     return;
   }

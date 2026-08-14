@@ -11,6 +11,10 @@ import {
   type AcpSessionStoreEntry,
 } from "../acp/runtime/session-meta.js";
 import {
+  isExecTaskBackingAlive,
+  reattachPersistedExecLongTasks,
+} from "../agents/long-task-runtime.js";
+import {
   formatSubagentRecoveryWedgedReason,
   isSubagentRecoveryWedgedEntry,
 } from "../agents/subagent-recovery-state.js";
@@ -490,6 +494,10 @@ function hasCliRunIdentity(task: TaskRecord): boolean {
 }
 
 function hasBackingSession(task: TaskRecord, context?: BackingSessionLookupContext): boolean {
+  if (task.runtime === "exec") {
+    return isExecTaskBackingAlive(task);
+  }
+
   if (task.runtime === "cron") {
     if (!taskRegistryMaintenanceRuntime.isRuntimeAuthoritative()) {
       return true;
@@ -1221,6 +1229,9 @@ export async function sweepTaskRegistry(): Promise<TaskRegistryMaintenanceSummar
 
 export function startTaskRegistryMaintenance() {
   taskRegistryMaintenanceRuntime.ensureTaskRegistryReady();
+  void reattachPersistedExecLongTasks().catch((error) => {
+    log.warn("Failed to reattach exec long tasks after startup", { error });
+  });
   deferredSweep = setTimeout(() => {
     deferredSweep = null;
     startScheduledSweep();

@@ -1080,6 +1080,7 @@ describe("task-registry", () => {
           acp: 1,
           cli: 0,
           cron: 1,
+          exec: 0,
         },
       });
     });

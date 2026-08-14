@@ -2,7 +2,7 @@
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 
 /** Runtime family that owns a task run lifecycle. */
-export type TaskRuntime = "subagent" | "acp" | "cli" | "cron";
+export type TaskRuntime = "subagent" | "acp" | "cli" | "cron" | "exec";
 
 export type TaskStatus =
   | "queued"
@@ -30,7 +30,7 @@ export type TaskScopeKind = "session" | "system";
 export type TaskStatusCounts = Record<TaskStatus, number>;
 export type TaskRuntimeCounts = Record<TaskRuntime, number>;
 
-const TASK_RUNTIMES = new Set<TaskRuntime>(["subagent", "acp", "cli", "cron"]);
+const TASK_RUNTIMES = new Set<TaskRuntime>(["subagent", "acp", "cli", "cron", "exec"]);
 const TASK_STATUSES = new Set<TaskStatus>([
   "queued",
   "running",

@@ -14,6 +14,7 @@ import {
   listActiveEmbeddedRunSessionKeys,
   resolveActiveEmbeddedRunSessionId,
 } from "../../agents/embedded-agent-runner/runs.js";
+import { cancelLongTasksForSession } from "../../agents/long-task-runtime.js";
 import {
   getLatestSubagentRunByChildSessionKey,
   listSubagentRunsForController,
@@ -203,6 +204,9 @@ export function abortSessionRunTargetWithOutcome(params: { key?: string; session
     aborted = abortDeps.abortEmbeddedAgentRun(sessionId) || aborted;
     // Also try treating sessionId as a runId (channel/webchat often share ids).
     aborted = abortDeps.abortEmbeddedAgentRunByRunId(sessionId) || aborted;
+  }
+  for (const candidateKey of keys) {
+    cancelLongTasksForSession(candidateKey, "stop");
   }
   // Free leftover in-progress exec/bash for this stop target, including
   // backgrounded sessions that tool-level abort intentionally leaves running.

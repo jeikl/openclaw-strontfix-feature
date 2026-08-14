@@ -1,6 +1,6 @@
 export type TaskStatus = "queued" | "running" | "completed" | "failed" | "cancelled" | "timed_out";
 
-export type TaskRuntime = "subagent" | "cron" | "acp" | "cli";
+export type TaskRuntime = "subagent" | "cron" | "acp" | "cli" | "exec";
 type TaskTimestamp = number | string;
 
 export type TaskSummary = {
@@ -55,6 +55,7 @@ function normalizeTaskRuntime(value: unknown): TaskRuntime | undefined {
     case "cron":
     case "acp":
     case "cli":
+    case "exec":
       return value;
     default:
       return undefined;
