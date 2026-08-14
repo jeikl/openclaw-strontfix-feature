@@ -136,10 +136,9 @@ export type ExecToolDetails =
       noOutputTimedOut?: boolean;
       cwd?: string;
       sessionId?: string;
+      outputPath?: string;
       folded?: boolean;
-      shortPolls?: number;
-      shortPollElapsedMs?: number;
-      phase?: "short_polling" | "long_running";
+      phase?: "long_running";
       taskStatus?: "succeeded" | "failed" | "timed_out" | "cancelled";
     }
   | {

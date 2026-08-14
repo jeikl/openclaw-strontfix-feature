@@ -131,7 +131,9 @@ export function hasAbortableSessionRun(host: {
   }
   return Boolean(
     host.sessionsResult?.sessions.some(
-      (session) => session.key === host.sessionKey && isSessionRunActive(session),
+      (session) =>
+        session.key === host.sessionKey &&
+        (isSessionRunActive(session) || session.status === "running"),
     ),
   );
 }

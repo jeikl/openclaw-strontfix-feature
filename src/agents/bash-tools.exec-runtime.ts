@@ -14,6 +14,7 @@ import {
   type ExecApprovalDecision,
   type ExecTarget,
 } from "../infra/exec-approvals.js";
+import { appendExecOutputLog, resolveExecOutputPath } from "../infra/gateway-stop-intent.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import { findPathKey, mergePathPrepend, removePathPrepend } from "../infra/path-prepend.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
@@ -27,6 +28,7 @@ import { formatFencedCodeBlock } from "../shared/markdown-code.js";
 import type { ProcessSession } from "./bash-process-registry.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
+import { notifyLongTaskProcessFinished } from "./long-task-runtime.js";
 import type { AgentToolResult } from "./runtime/index.js";
 export { applyPathPrepend, findPathKey, normalizePathPrepend } from "../infra/path-prepend.js";
 export {
@@ -314,8 +316,12 @@ export function applyShellPath(env: Record<string, string>, shellPath?: string |
 }
 
 function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "failed") {
-  // Long-task supervisor returns a folded tool result on the original turn.
-  // Heartbeat/system-event notify is the old broken completion bus.
+  // Long-task supervisor consumes the same exit notify
+  // so completion aborts the remaining wait instead of waiting it out.
+  if (notifyLongTaskProcessFinished(session.id)) {
+    session.exitNotified = true;
+    return;
+  }
   if (!session.backgrounded || !session.notifyOnExit || session.exitNotified) {
     return;
   }
@@ -697,8 +703,10 @@ export async function runExecProcess(opts: {
     });
   };
 
+  const outputPath = resolveExecOutputPath(sessionId);
   const handleStdout = (data: string) => {
     const raw = data;
+    appendExecOutputLog(outputPath, raw);
     // Detect smkx/rmkx BEFORE sanitizeBinaryOutput strips ESC sequences.
     // Note: PTY chunking is arbitrary, but smkx/rmkx sequences are typically short (4-5 bytes)
     // and sent atomically by terminals. Split across chunks is rare in practice.
@@ -715,6 +723,7 @@ export async function runExecProcess(opts: {
 
   const handleStderr = (data: string) => {
     const str = sanitizeBinaryOutput(data);
+    appendExecOutputLog(outputPath, str);
     for (const chunk of chunkString(str)) {
       appendOutput(session, "stderr", chunk);
       emitUpdate();

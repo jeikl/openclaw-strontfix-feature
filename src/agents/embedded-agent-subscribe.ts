@@ -202,6 +202,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     deferredBlockReplies: [],
     deferredAssistantEvents: [],
     toolExecutionSinceLastBlockReply: false,
+    inFlightToolCount: 0,
     reasoningStreamOpen: false,
     assistantMessageIndex: 0,
     lastAssistantStreamItemId: undefined,

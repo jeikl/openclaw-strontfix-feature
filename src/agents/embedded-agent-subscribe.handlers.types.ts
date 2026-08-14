@@ -129,6 +129,8 @@ export type EmbeddedAgentSubscribeState = {
   deferredBlockReplies: BlockReplyPayload[];
   deferredAssistantEvents: AssistantStreamDelivery[];
   toolExecutionSinceLastBlockReply: boolean;
+  /** Open tool_execution_start events that have not yet ended. */
+  inFlightToolCount: number;
   reasoningStreamOpen: boolean;
   assistantMessageIndex: number;
   lastAssistantStreamItemId?: string;

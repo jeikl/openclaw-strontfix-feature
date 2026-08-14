@@ -92,15 +92,12 @@ describe("process input-wait hints", () => {
     });
   });
 
-  it("adds input-wait hints to poll when no new output arrives", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-01-01T00:00:16.000Z"));
+  it("rejects process poll", async () => {
     const processTool = createProcessTool();
     const session = createProcessSessionFixture({
       id: "sess-poll",
       command: "python prompt.py",
       backgrounded: true,
-      startedAt: Date.now() - 16_000,
     });
     installWritableStdin(session);
     addSession(session);
@@ -110,16 +107,8 @@ describe("process input-wait hints", () => {
       sessionId: "sess-poll",
     });
 
-    expect(textOf(result)).toContain("(no new output)");
-    expect(textOf(result)).toContain("may be waiting for input");
-    expectRecordFields(result.details, {
-      status: "running",
-      sessionId: "sess-poll",
-      stdinWritable: true,
-      waitingForInput: true,
-      idleMs: 16_000,
-      lastOutputAt: Date.now() - 16_000,
-    });
+    expect(textOf(result)).toContain("process poll is removed");
+    expectRecordFields(result.details, { status: "failed" });
   });
 
   it("marks idle writable sessions in process list", async () => {

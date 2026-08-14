@@ -3,7 +3,7 @@ import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import type { ExtensionContext } from "openclaw/plugin-sdk/agent-sessions";
 import { describe, expect, it } from "vitest";
 import { pruneContextMessages } from "./pruner.js";
-import { DEFAULT_CONTEXT_PRUNING_SETTINGS } from "./settings.js";
+import { DEFAULT_CONTEXT_PRUNING_SETTINGS, EXEC_CONTEXT_PRUNE_SOFT_TRIM } from "./settings.js";
 
 type AssistantMessage = Extract<AgentMessage, { role: "assistant" }>;
 type AssistantContentBlock = AssistantMessage["content"][number];
@@ -53,12 +53,14 @@ function makeToolResult(
   content: Array<
     { type: "text"; text: string } | { type: "image"; data: string; mimeType: string }
   >,
+  options?: { toolName?: string; details?: Record<string, unknown> },
 ): AgentMessage {
   return {
     role: "toolResult",
-    toolName: "read",
+    toolName: options?.toolName ?? "read",
     content,
     timestamp: Date.now(),
+    ...(options?.details ? { details: options.details } : {}),
   } as AgentMessage;
 }
 
@@ -470,5 +472,85 @@ describe("pruneContextMessages", () => {
 
     const toolResult = result[1] as Extract<AgentMessage, { role: "toolResult" }>;
     expect(toolResult.content).toEqual([{ type: "text", text: placeholder }]);
+  });
+
+  it("soft-trims exec results with more tail than generic tools and keeps the log path", () => {
+    const outputPath = "/tmp/openclaw-exec-output/sess-exec-trim.log";
+    const head = "HEAD-START\n";
+    const tail = "\nTAIL-ERROR exit 1\n";
+    const uniqueMiddle = "UNIQUE-MIDDLE-MARKER-XYZ";
+    const text = `${head}${"A".repeat(3_000)}${uniqueMiddle}${"B".repeat(6_000)}${tail}`;
+    const messages: AgentMessage[] = [
+      makeUser("run build"),
+      makeToolResult([{ type: "text", text }], {
+        toolName: "exec",
+        details: { outputPath, sessionId: "sess-exec-trim" },
+      }),
+      makeAssistant([{ type: "text", text: "looking" }]),
+    ];
+
+    const result = pruneContextMessages({
+      messages,
+      settings: {
+        ...DEFAULT_CONTEXT_PRUNING_SETTINGS,
+        keepLastAssistants: 1,
+        softTrimRatio: 0,
+        hardClear: {
+          ...DEFAULT_CONTEXT_PRUNING_SETTINGS.hardClear,
+          enabled: false,
+        },
+      },
+      ctx: CONTEXT_WINDOW_1M,
+      isToolPrunable: () => true,
+      contextWindowTokensOverride: 16,
+    });
+
+    const toolResult = result[1] as Extract<AgentMessage, { role: "toolResult" }>;
+    const textBlock = toolResult.content[0] as { type: "text"; text: string };
+    expect(textBlock.text).toContain("HEAD-START");
+    expect(textBlock.text).toContain("TAIL-ERROR exit 1");
+    expect(textBlock.text).not.toContain("UNIQUE-MIDDLE-MARKER-XYZ");
+    expect(textBlock.text).toContain(
+      `kept first ${EXEC_CONTEXT_PRUNE_SOFT_TRIM.headChars} chars and last ${EXEC_CONTEXT_PRUNE_SOFT_TRIM.tailChars} chars`,
+    );
+    expect(textBlock.text).toContain(outputPath);
+    expect(textBlock.text).toContain("Use read to open it");
+  });
+
+  it("hard-clears exec results to a placeholder that still points at the full log", () => {
+    const outputPath = "/tmp/openclaw-exec-output/sess-exec-clear.log";
+    const messages: AgentMessage[] = [
+      makeUser("run build"),
+      makeToolResult([{ type: "text", text: "X".repeat(20_000) }], {
+        toolName: "exec",
+        details: { outputPath },
+      }),
+      makeAssistant([{ type: "text", text: "done" }]),
+    ];
+
+    const result = pruneContextMessages({
+      messages,
+      settings: {
+        ...DEFAULT_CONTEXT_PRUNING_SETTINGS,
+        keepLastAssistants: 1,
+        softTrimRatio: 0,
+        hardClearRatio: 0,
+        minPrunableToolChars: 1,
+        hardClear: {
+          enabled: true,
+          placeholder: "[Old tool result content cleared]",
+        },
+      },
+      ctx: CONTEXT_WINDOW_1M,
+      isToolPrunable: () => true,
+      contextWindowTokensOverride: 8,
+    });
+
+    const toolResult = result[1] as Extract<AgentMessage, { role: "toolResult" }>;
+    const textBlock = toolResult.content[0] as { type: "text"; text: string };
+    expect(textBlock.text).toContain("Old exec output cleared");
+    expect(textBlock.text).toContain(outputPath);
+    expect(textBlock.text).toContain("Use read to open it");
+    expect(textBlock.text).not.toContain("Old tool result content cleared");
   });
 });

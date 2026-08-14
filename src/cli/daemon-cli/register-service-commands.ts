@@ -117,13 +117,22 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
     .description("Stop the Gateway service (launchd/systemd/schtasks)")
     .option("--json", "Output JSON", false)
     .option(
+      "--force",
+      "User-forced stop: kill every agent long-task and do not resume turns on next start",
+      false,
+    )
+    .option(
       "--disable",
       "Persistently suppress KeepAlive/RunAtLoad so the gateway does not respawn until next start (launchd only)",
       false,
     )
-    .action(async (cmdOpts) => {
+    .action(async (cmdOpts, command) => {
       const { runDaemonStop } = await loadDaemonLifecycleModule();
-      await runDaemonStop(cmdOpts);
+      const parentForce = inheritOptionFromParent<boolean>(command, "force");
+      await runDaemonStop({
+        ...cmdOpts,
+        force: Boolean(cmdOpts.force || parentForce),
+      });
     });
 
   parent

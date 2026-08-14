@@ -796,6 +796,13 @@ export async function runGatewayLoop(params: {
   };
   const onSigint = () => {
     gatewayLog.info("signal SIGINT received");
+    void import("../../infra/gateway-stop-intent.js")
+      .then(({ writeGatewayStopIntent }) => {
+        writeGatewayStopIntent({ mode: "graceful", source: "SIGINT" });
+      })
+      .catch((err: unknown) => {
+        gatewayLog.warn(`failed to record graceful stop intent: ${String(err)}`);
+      });
     request("stop", "SIGINT");
   };
   const onSigusr1 = () => {

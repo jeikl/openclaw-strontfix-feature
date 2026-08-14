@@ -27,12 +27,12 @@ describe("createOpenClawCodingTools deferred follow-up guidance", () => {
     const process = findToolDescription("process", true);
 
     expect(exec.toolNames).toEqual(["exec", "process", "cron"]);
-    expect(exec.description).toBe(
-      "Execute shell commands with background continuation for work that starts now. Use yieldMs/background to continue later via process tool. For long-running work started now, rely on automatic completion wake when it is enabled and the command emits output or fails; otherwise use process to confirm completion. Use process whenever you need logs, status, input, or intervention. Do not use exec sleep or delay loops for reminders or deferred follow-ups; use cron instead. Use pty=true for TTY-required commands (terminal UIs, coding agents).",
+    expect(exec.description).toContain(
+      "The runtime waits internally until the command finishes and returns one folded result.",
     );
-    expect(process.description).toBe(
-      "Manage running exec sessions for commands already started: list, poll, log, write, send-keys, submit, paste, kill. Use poll/log when you need status, logs, quiet-success confirmation, or completion confirmation when automatic completion wake is unavailable. Use poll/log also for input-wait hints. Use write/send-keys/submit/paste/kill for input or intervention. Do not use process polling to emulate timers or reminders; use cron for scheduled follow-ups.",
-    );
+    expect(exec.description).toContain("use cron instead");
+    expect(process.description).toContain("Do not process-poll to wait.");
+    expect(process.description).toContain("use cron for scheduled follow-ups");
   });
 
   it("drops cron-specific guidance when cron is unavailable", () => {
@@ -40,12 +40,12 @@ describe("createOpenClawCodingTools deferred follow-up guidance", () => {
     const process = findToolDescription("process", false);
 
     expect(exec.toolNames).toEqual(["exec", "process"]);
-    expect(exec.description).toBe(
-      "Execute shell commands with background continuation for work that starts now. Use yieldMs/background to continue later via process tool. For long-running work started now, rely on automatic completion wake when it is enabled and the command emits output or fails; otherwise use process to confirm completion. Use process whenever you need logs, status, input, or intervention. Use pty=true for TTY-required commands (terminal UIs, coding agents).",
+    expect(exec.description).toContain(
+      "The runtime waits internally until the command finishes and returns one folded result.",
     );
-    expect(process.description).toBe(
-      "Manage running exec sessions for commands already started: list, poll, log, write, send-keys, submit, paste, kill. Use poll/log when you need status, logs, quiet-success confirmation, or completion confirmation when automatic completion wake is unavailable. Use poll/log also for input-wait hints. Use write/send-keys/submit/paste/kill for input or intervention.",
-    );
+    expect(exec.description).not.toContain("use cron instead");
+    expect(process.description).toContain("Do not process-poll to wait.");
+    expect(process.description).not.toContain("use cron for scheduled follow-ups");
   });
 
   it("preserves ownership metadata when replacing process descriptions", () => {

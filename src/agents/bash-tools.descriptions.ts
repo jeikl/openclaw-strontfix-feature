@@ -21,7 +21,7 @@ function deriveExecShortName(fullPath: string): string {
 /** Builds the model-facing exec tool description for the current platform/config. */
 export function describeExecTool(params?: { agentId?: string; hasCronTool?: boolean }): string {
   const base = [
-    "Execute shell commands. The runtime waits for long commands internally (short polls, then event park) and returns one folded result. Do not process-poll to wait.",
+    "Execute shell commands. The runtime waits internally until the command finishes and returns one folded result. Do not process-poll to wait.",
     "Use yieldMs/background only to hand the command to that runtime wait. Use process for logs, stdin, or kill — not as a wait loop.",
     params?.hasCronTool
       ? "Do not use exec sleep or delay loops for reminders or deferred follow-ups; use cron instead."
@@ -71,8 +71,8 @@ export function describeExecTool(params?: { agentId?: string; hasCronTool?: bool
 /** Builds the model-facing process-control tool description. */
 export function describeProcessTool(params?: { hasCronTool?: boolean }): string {
   return [
-    "Manage running exec sessions for commands already started: list, poll, log, write, send-keys, submit, paste, kill.",
-    "Do not poll a session owned by the long-task runtime. Use tasks_status or /status to inspect. Use log/write/send-keys/submit/paste/kill for output or intervention.",
+    "Manage running exec sessions for commands already started: list, log, write, send-keys, submit, paste, kill.",
+    "Do not process-poll to wait. Exec waits internally until the command finishes; use tasks_status or tasks_list to inspect. Use log/write/send-keys/submit/paste/kill for output or intervention.",
     params?.hasCronTool
       ? "Do not use process polling to emulate timers or reminders; use cron for scheduled follow-ups."
       : undefined,

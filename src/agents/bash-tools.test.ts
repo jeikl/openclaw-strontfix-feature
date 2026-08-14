@@ -329,8 +329,6 @@ const waitOneTurn = () =>
   });
 const readTotalLines = (details: unknown) => (details as { totalLines?: number }).totalLines;
 const readProcessStatus = (details: unknown) => (details as { status?: string }).status;
-const readProcessStatusOrRunning = (details: unknown) =>
-  readProcessStatus(details) ?? PROCESS_STATUS_RUNNING;
 const expectTextContainsValues = (
   text: string,
   values: string[] | undefined,
@@ -359,23 +357,9 @@ const executeExecCommand = (
 ) => executeExecTool(tool, { command, ...options });
 const executeProcessTool = (tool: ProcessToolInstance, params: ProcessToolArgs) =>
   tool.execute(nextCallId(), params);
-type ProcessPollResult = { status: string; output?: string };
 async function listProcessSessions(tool: ProcessToolInstance) {
   const list = await executeProcessTool(tool, { action: "list" });
   return (list.details as { sessions: ProcessSessionSummary[] }).sessions;
-}
-async function pollProcessSession(params: {
-  tool: ProcessToolInstance;
-  sessionId: string;
-}): Promise<ProcessPollResult> {
-  const poll = await executeProcessTool(params.tool, {
-    action: "poll",
-    sessionId: params.sessionId,
-  });
-  return {
-    status: readProcessStatusOrRunning(poll.details),
-    output: readTextContent(poll.content),
-  };
 }
 function applyDefaultShellEnv() {
   process.env.OPENCLAW_EXEC_SHELL_SNAPSHOT = "0";
@@ -608,11 +592,9 @@ describe("tool descriptions", () => {
     const processWithCron = createProcessTool({ hasCronTool: true });
 
     expect(execWithCron.description).toContain(
-      "The runtime waits for long commands internally (short polls, then event park)",
+      "The runtime waits internally until the command finishes",
     );
-    expect(processWithCron.description).toContain(
-      "Do not poll a session owned by the long-task runtime.",
-    );
+    expect(processWithCron.description).toContain("Do not process-poll to wait.");
     expect(processWithCron.description).toContain(
       "Use log/write/send-keys/submit/paste/kill for output or intervention.",
     );
@@ -625,9 +607,7 @@ describe("tool descriptions", () => {
     expect(execTool.description).not.toContain("use cron instead");
     expect(processTool.description).not.toContain("scheduled follow-ups");
     expect(execTool.description).toContain("Do not process-poll to wait");
-    expect(processTool.description).toContain(
-      "Do not poll a session owned by the long-task runtime",
-    );
+    expect(processTool.description).toContain("Do not process-poll to wait.");
     expect(processTool.description).toContain(
       "Use log/write/send-keys/submit/paste/kill for output or intervention.",
     );
@@ -645,28 +625,11 @@ describe("exec tool backgrounding", () => {
   useCapturedEnv([...SHELL_ENV_KEYS], applyDefaultShellEnv);
 
   it(
-    "backgrounds after yield and can be polled",
+    "backgrounds after yield and returns a folded result",
     async () => {
       const result = await executeExecCommand(execTool, shellEcho(OUTPUT_DONE), { yieldMs: 0 });
-
-      // Timing can race here: command may already be complete before the first response.
-      if (result.details.status === PROCESS_STATUS_COMPLETED) {
-        expect(readTextContent(result.content) ?? "").toContain(OUTPUT_DONE);
-        return;
-      }
-
-      const sessionId = requireRunningSessionId(result);
-
-      let output = "";
-      await expect
-        .poll(async () => {
-          const pollResult = await pollProcessSession({ tool: processTool, sessionId });
-          output = pollResult.output ?? "";
-          return pollResult.status;
-        }, BACKGROUND_POLL_OPTIONS)
-        .toBe(PROCESS_STATUS_COMPLETED);
-
-      expect(output).toContain(OUTPUT_DONE);
+      expect(readProcessStatus(result.details)).toBe(PROCESS_STATUS_COMPLETED);
+      expect(readTextContent(result.content) ?? "").toContain(OUTPUT_DONE);
     },
     isWin ? 15_000 : 5_000,
   );

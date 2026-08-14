@@ -1,10 +1,15 @@
 /** Context-pruning planner that trims old assistant/tool content under token pressure. */
+import { resolveExecOutputPath } from "../../../infra/gateway-stop-intent.js";
 import type { ImageContent, TextContent, ToolResultMessage } from "../../../llm/types.js";
 import { CHARS_PER_TOKEN_ESTIMATE, estimateStringChars } from "../../../utils/cjk-chars.js";
 import { dropThinkingBlocks } from "../../embedded-agent-runner/thinking.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { ExtensionContext } from "../../sessions/index.js";
-import type { EffectiveContextPruningSettings } from "./settings.js";
+import {
+  DEFAULT_CONTEXT_PRUNING_SETTINGS,
+  EXEC_CONTEXT_PRUNE_SOFT_TRIM,
+  type EffectiveContextPruningSettings,
+} from "./settings.js";
 import { makeToolPrunablePredicate } from "./tools.js";
 
 const IMAGE_CHAR_ESTIMATE = 8_000;
@@ -12,6 +17,63 @@ const PRUNED_CONTEXT_IMAGE_MARKER = "[image removed during context pruning]";
 
 function asText(text: string): TextContent {
   return { type: "text", text };
+}
+
+function isExecToolName(toolName: unknown): boolean {
+  return (
+    String(toolName ?? "")
+      .trim()
+      .toLowerCase() === "exec"
+  );
+}
+
+function isDefaultSoftTrim(settings: EffectiveContextPruningSettings): boolean {
+  const defaults = DEFAULT_CONTEXT_PRUNING_SETTINGS.softTrim;
+  return (
+    settings.softTrim.maxChars === defaults.maxChars &&
+    settings.softTrim.headChars === defaults.headChars &&
+    settings.softTrim.tailChars === defaults.tailChars
+  );
+}
+
+function resolveSoftTrimBudget(
+  msg: ToolResultMessage,
+  settings: EffectiveContextPruningSettings,
+): { maxChars: number; headChars: number; tailChars: number } {
+  if (isExecToolName(msg.toolName) && isDefaultSoftTrim(settings)) {
+    return EXEC_CONTEXT_PRUNE_SOFT_TRIM;
+  }
+  return settings.softTrim;
+}
+
+function resolveExecOutputPointer(msg: ToolResultMessage): string | undefined {
+  const details = (msg as { details?: Record<string, unknown> }).details;
+  const fromDetails = typeof details?.outputPath === "string" ? details.outputPath.trim() : "";
+  if (fromDetails) {
+    return fromDetails;
+  }
+  const sessionId = typeof details?.sessionId === "string" ? details.sessionId.trim() : "";
+  if (sessionId) {
+    return resolveExecOutputPath(sessionId);
+  }
+  const text = collectTextSegments(msg.content).join("\n");
+  const pathMatch = text.match(/^outputPath:\s*(\S+)/m);
+  if (pathMatch?.[1]) {
+    return pathMatch[1];
+  }
+  const sessionMatch = text.match(/^sessionId:\s*(\S+)/m);
+  if (sessionMatch?.[1]) {
+    return resolveExecOutputPath(sessionMatch[1]);
+  }
+  return undefined;
+}
+
+function formatExecHardClearPlaceholder(msg: ToolResultMessage): string {
+  const outputPath = resolveExecOutputPointer(msg);
+  if (outputPath) {
+    return `[Old exec output cleared. Full log: ${outputPath}. Use read to open it.]`;
+  }
+  return "[Old exec output cleared. Full log may be in the exec-output state directory. Use read if you have the sessionId.]";
 }
 
 function serializeMalformedTextBlock(block: unknown): string {
@@ -252,20 +314,21 @@ function softTrimToolResultMessage(params: {
   settings: EffectiveContextPruningSettings;
 }): ToolResultMessage | null {
   const { msg, settings } = params;
+  const budget = resolveSoftTrimBudget(msg, settings);
   const hasImages = hasImageBlocks(msg.content);
   const parts = hasImages
     ? collectPrunableToolResultSegments(msg.content)
     : collectTextSegments(msg.content);
   const rawLen = estimateJoinedTextLength(parts);
-  if (rawLen <= settings.softTrim.maxChars) {
+  if (rawLen <= budget.maxChars) {
     if (!hasImages) {
       return null;
     }
     return { ...msg, content: [asText(parts.join("\n"))] };
   }
 
-  const headChars = Math.max(0, settings.softTrim.headChars);
-  const tailChars = Math.max(0, settings.softTrim.tailChars);
+  const headChars = Math.max(0, budget.headChars);
+  const tailChars = Math.max(0, budget.tailChars);
   if (headChars + tailChars >= rawLen) {
     if (!hasImages) {
       return null;
@@ -279,9 +342,14 @@ function softTrimToolResultMessage(params: {
 ...
 ${tail}`;
 
+  const outputPath = isExecToolName(msg.toolName) ? resolveExecOutputPointer(msg) : undefined;
+  const pointer =
+    outputPath && !trimmed.includes(outputPath)
+      ? ` Full log: ${outputPath}. Use read to open it.`
+      : "";
   const note = `
 
-[Tool result trimmed: kept first ${headChars} chars and last ${tailChars} chars of ${rawLen} chars.]`;
+[Tool result trimmed: kept first ${headChars} chars and last ${tailChars} chars of ${rawLen} chars.${pointer}]`;
 
   return { ...msg, content: [asText(trimmed + note)] };
 }
@@ -395,9 +463,13 @@ export function pruneContextMessages(params: {
     }
 
     const beforeChars = estimateMessageChars(msg);
+    const placeholder =
+      isExecToolName(msg.toolName) && resolveExecOutputPointer(msg)
+        ? formatExecHardClearPlaceholder(msg)
+        : settings.hardClear.placeholder;
     const cleared: ToolResultMessage = {
       ...msg,
-      content: [asText(settings.hardClear.placeholder)],
+      content: [asText(placeholder)],
     };
     if (!next) {
       next = messages.slice();

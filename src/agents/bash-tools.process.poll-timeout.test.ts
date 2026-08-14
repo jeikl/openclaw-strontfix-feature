@@ -1,19 +1,13 @@
 /**
- * Regression coverage for process poll timeout and retry hints.
- * Poll waits, aborts, and diagnostic retry suggestions must stay bounded.
+ * process poll is removed: exec waits internally; inspect via tasks_status.
  */
-import { afterEach, expect, test, vi } from "vitest";
+import { afterEach, expect, test } from "vitest";
 import { resetDiagnosticSessionStateForTest } from "../logging/diagnostic-session-state.js";
-import {
-  addSession,
-  appendOutput,
-  markExited,
-  resetProcessRegistryForTests,
-} from "./bash-process-registry.js";
+import { addSession, resetProcessRegistryForTests } from "./bash-process-registry.js";
 import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
 import { createProcessTool } from "./bash-tools.process.js";
 import { processSchema } from "./bash-tools.schemas.js";
-import { resetLongTaskRuntimeForTests, runLongTaskSupervisor } from "./long-task-runtime.js";
+import { resetLongTaskRuntimeForTests } from "./long-task-runtime.js";
 
 afterEach(() => {
   resetProcessRegistryForTests();
@@ -21,239 +15,29 @@ afterEach(() => {
   resetDiagnosticSessionStateForTest();
 });
 
-function createProcessSessionHarness(sessionId: string) {
+test("process poll is rejected in favor of tasks_status", async () => {
   const processTool = createProcessTool();
-  const session = createProcessSessionFixture({
-    id: sessionId,
-    command: "test",
-    backgrounded: true,
-  });
-  addSession(session);
-  return { processTool, session };
-}
-
-async function pollSession(
-  processTool: ReturnType<typeof createProcessTool>,
-  callId: string,
-  sessionId: string,
-  timeout?: number | string,
-  signal?: AbortSignal,
-) {
-  const args = {
+  addSession(
+    createProcessSessionFixture({
+      id: "sess-poll",
+      command: "test",
+      backgrounded: true,
+    }),
+  );
+  const result = await processTool.execute("toolcall-poll", {
     action: "poll",
-    sessionId,
-    ...(timeout === undefined ? {} : { timeout }),
-  } as unknown as Parameters<ReturnType<typeof createProcessTool>["execute"]>[1];
-  return processTool.execute(callId, args, signal);
-}
-
-function retryMs(result: Awaited<ReturnType<ReturnType<typeof createProcessTool>["execute"]>>) {
-  return (result.details as { retryInMs?: number }).retryInMs;
-}
-
-function pollStatus(result: Awaited<ReturnType<ReturnType<typeof createProcessTool>["execute"]>>) {
-  return (result.details as { status?: string }).status;
-}
-
-async function expectCompletedPollWithTimeout(params: {
-  sessionId: string;
-  callId: string;
-  timeout: number | string;
-  advanceMs: number;
-  assertUnresolvedAtMs?: number;
-}) {
-  vi.useFakeTimers();
-  try {
-    const { processTool, session } = createProcessSessionHarness(params.sessionId);
-
-    setTimeout(() => {
-      appendOutput(session, "stdout", "done\n");
-      markExited(session, 0, null, "completed");
-    }, 50);
-
-    const pollPromise = pollSession(processTool, params.callId, params.sessionId, params.timeout);
-    if (params.assertUnresolvedAtMs !== undefined) {
-      let resolved = false;
-      void pollPromise.finally(() => {
-        resolved = true;
-      });
-      await vi.advanceTimersByTimeAsync(params.assertUnresolvedAtMs);
-      expect(resolved).toBe(false);
-    }
-
-    await vi.advanceTimersByTimeAsync(params.advanceMs);
-    const poll = await pollPromise;
-    const details = poll.details as { status?: string; aggregated?: string };
-    expect(details.status).toBe("completed");
-    expect(details.aggregated ?? "").toContain("done");
-  } finally {
-    vi.useRealTimers();
-  }
-}
-
-test("process poll waits for completion when timeout is provided", async () => {
-  await expectCompletedPollWithTimeout({
-    sessionId: "sess",
-    callId: "toolcall",
-    timeout: 2000,
-    assertUnresolvedAtMs: 20,
-    advanceMs: 50,
-  });
-});
-
-test("process poll accepts string timeout values", async () => {
-  await expectCompletedPollWithTimeout({
-    sessionId: "sess-2",
-    callId: "toolcall",
-    timeout: "2000",
-    advanceMs: 350,
-  });
-});
-
-test("process poll clamps long waits to 30 seconds", async () => {
-  vi.useFakeTimers();
-  try {
-    const { processTool } = createProcessSessionHarness("sess-clamp");
-
-    const pollPromise = pollSession(processTool, "toolcall", "sess-clamp", 120_000);
-    let resolved = false;
-    void pollPromise.finally(() => {
-      resolved = true;
-    });
-
-    await vi.advanceTimersByTimeAsync(29_999);
-    expect(resolved).toBe(false);
-
-    await vi.advanceTimersByTimeAsync(1);
-    const poll = await pollPromise;
-    expect(pollStatus(poll)).toBe("running");
-  } finally {
-    vi.useRealTimers();
-  }
-});
-
-test("process poll schema advertises the 30 second wait cap", () => {
-  const timeoutSchema = processSchema.properties.timeout;
-  expect((timeoutSchema as { description?: string }).description).toContain("max 30000 ms");
-});
-
-test("process poll aborts while waiting for completion", async () => {
-  vi.useFakeTimers();
-  try {
-    const { processTool } = createProcessSessionHarness("sess-abort");
-    const controller = new AbortController();
-
-    const pollPromise = pollSession(
-      processTool,
-      "toolcall",
-      "sess-abort",
-      30_000,
-      controller.signal,
-    );
-    await vi.advanceTimersByTimeAsync(500);
-    controller.abort();
-
-    let err: unknown;
-    try {
-      await pollPromise;
-    } catch (caught) {
-      err = caught;
-    }
-    expect(err).toBeInstanceOf(Error);
-    expect((err as Error).name).toBe("AbortError");
-  } finally {
-    vi.useRealTimers();
-  }
-});
-
-test("process poll exposes adaptive retryInMs for repeated no-output polls", async () => {
-  const sessionId = "sess-retry";
-  const { processTool } = createProcessSessionHarness(sessionId);
-
-  const polls = await Promise.all([
-    pollSession(processTool, "toolcall-1", sessionId),
-    pollSession(processTool, "toolcall-2", sessionId),
-    pollSession(processTool, "toolcall-3", sessionId),
-    pollSession(processTool, "toolcall-4", sessionId),
-    pollSession(processTool, "toolcall-5", sessionId),
-  ]);
-
-  expect(polls.map((poll) => retryMs(poll))).toEqual([5000, 10000, 30000, 60000, 60000]);
-});
-
-test("process poll resets retryInMs when output appears and clears on completion", async () => {
-  const sessionId = "sess-reset";
-  const { processTool, session } = createProcessSessionHarness(sessionId);
-
-  const poll1 = await pollSession(processTool, "toolcall-1", sessionId);
-  const poll2 = await pollSession(processTool, "toolcall-2", sessionId);
-  expect(retryMs(poll1)).toBe(5000);
-  expect(retryMs(poll2)).toBe(10000);
-
-  appendOutput(session, "stdout", "step complete\n");
-  const pollWithOutput = await pollSession(processTool, "toolcall-output", sessionId);
-  expect(retryMs(pollWithOutput)).toBe(5000);
-
-  markExited(session, 0, null, "completed");
-  const pollCompleted = await pollSession(processTool, "toolcall-completed", sessionId);
-  expect(pollStatus(pollCompleted)).toBe("completed");
-  expect(retryMs(pollCompleted)).toBeUndefined();
-
-  const pollFinished = await pollSession(processTool, "toolcall-finished", sessionId);
-  expect(pollStatus(pollFinished)).toBe("completed");
-  expect(retryMs(pollFinished)).toBeUndefined();
-});
-
-test("process poll exposes finished-session termination metadata", async () => {
-  const sessionId = "sess-signal";
-  const { processTool, session } = createProcessSessionHarness(sessionId);
-
-  appendOutput(session, "stderr", "terminated\n");
-  markExited(session, null, "SIGKILL", "failed", "no-output-timeout", true);
-
-  const poll = await pollSession(processTool, "toolcall-signal", sessionId);
-  const details = poll.details as {
-    status?: string;
-    exitCode?: number | null;
-    exitSignal?: NodeJS.Signals | number | null;
-    exitReason?: string;
-    timedOut?: boolean;
-    noOutputTimedOut?: boolean;
-    aggregated?: string;
-  };
-
-  expect(details.status).toBe("failed");
-  expect(details.exitCode).toBeUndefined();
-  expect(details.exitSignal).toBe("SIGKILL");
-  expect(details.exitReason).toBe("no-output-timeout");
-  expect(details.timedOut).toBe(true);
-  expect(details.noOutputTimedOut).toBe(true);
-  expect(details.aggregated).toContain("terminated");
-});
-
-test("process poll refuses sessions owned by the long-task runtime", async () => {
-  const sessionId = "sess-managed";
-  const { processTool } = createProcessSessionHarness(sessionId);
-  const pending = runLongTaskSupervisor({
-    processSessionId: sessionId,
-    command: "sleep 30",
-    exitPromise: new Promise(() => {}),
-    kill: () => {},
-    config: {
-      shortPolls: 4,
-      shortPollTimeoutMs: 200,
-      maxWaitMs: 5_000,
-      blockEndTurn: true,
-      retention: { succeededMs: 1_000, failedMs: 1_000, lostMs: 1_000, outputMs: 1_000 },
-    },
-    sessionKey: "agent:main:managed",
-  });
-  const poll = await pollSession(processTool, "toolcall-managed", sessionId);
-  expect(poll.details).toMatchObject({ status: "failed" });
-  expect(poll.content[0]).toMatchObject({
+    sessionId: "sess-poll",
+  } as never);
+  expect(result.details).toMatchObject({ status: "failed" });
+  expect(result.content[0]).toMatchObject({
     type: "text",
-    text: expect.stringContaining("owned by the long-task runtime"),
+    text: expect.stringContaining("process poll is removed"),
   });
-  resetLongTaskRuntimeForTests();
-  await pending.catch(() => undefined);
+});
+
+test("process schema no longer advertises poll as a wait action", () => {
+  const action = (processSchema.properties as { action?: { description?: string } }).action
+    ?.description;
+  expect(action).toContain("list");
+  expect(action).not.toMatch(/\bpoll\b/);
 });

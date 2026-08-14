@@ -11,6 +11,7 @@ import {
   type AcpSessionStoreEntry,
 } from "../acp/runtime/session-meta.js";
 import {
+  forceStopAllExecLongTasks,
   isExecTaskBackingAlive,
   reattachPersistedExecLongTasks,
 } from "../agents/long-task-runtime.js";
@@ -27,6 +28,7 @@ import type { CronRunLogEntry } from "../cron/run-log.js";
 import { loadCronJobsStoreSync, resolveCronJobsStorePath } from "../cron/store.js";
 import type { CronJob, CronStoreFile } from "../cron/types.js";
 import { getAgentRunContext } from "../infra/agent-events.js";
+import { consumeGatewayStopIntent } from "../infra/gateway-stop-intent.js";
 import { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
 import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -1229,7 +1231,14 @@ export async function sweepTaskRegistry(): Promise<TaskRegistryMaintenanceSummar
 
 export function startTaskRegistryMaintenance() {
   taskRegistryMaintenanceRuntime.ensureTaskRegistryReady();
-  void reattachPersistedExecLongTasks().catch((error) => {
+  void (async () => {
+    const stopIntent = consumeGatewayStopIntent();
+    if (stopIntent?.mode === "force") {
+      forceStopAllExecLongTasks("gateway-stop-force");
+      return;
+    }
+    await reattachPersistedExecLongTasks();
+  })().catch((error) => {
     log.warn("Failed to reattach exec long tasks after startup", { error });
   });
   deferredSweep = setTimeout(() => {

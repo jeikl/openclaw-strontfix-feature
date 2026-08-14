@@ -207,7 +207,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
   {
     id: "tasks_status",
     label: "tasks_status",
-    description: "Inspect long-task status without process poll",
+    description: "Inspect long-task status",
     sectionId: "sessions",
     profiles: ["coding"],
     includeInOpenClawGroup: true,

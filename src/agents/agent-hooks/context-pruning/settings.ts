@@ -68,6 +68,13 @@ export const DEFAULT_CONTEXT_PRUNING_SETTINGS: EffectiveContextPruningSettings =
   },
 };
 
+/** Exec logs keep more tail than generic tools — failures usually land at the end. */
+export const EXEC_CONTEXT_PRUNE_SOFT_TRIM = {
+  maxChars: 8_000,
+  headChars: 1_000,
+  tailChars: 4_000,
+} as const;
+
 /** Computes effective pruning settings, returning null when pruning is disabled or invalid. */
 export function computeEffectiveSettings(raw: unknown): EffectiveContextPruningSettings | null {
   if (!raw || typeof raw !== "object") {

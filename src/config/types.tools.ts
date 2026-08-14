@@ -594,21 +594,17 @@ export type MemorySearchConfig = {
 
 /** Runtime-owned long-task park / short-poll / retention settings. */
 export type LongTaskRetentionConfig = {
-  /** Keep succeeded records this long (ms). Default 7d. */
-  succeededMs?: number;
-  /** Keep failed / timed_out / cancelled records this long (ms). Default 7d. */
-  failedMs?: number;
-  /** Keep lost records this long (ms). Default 24h. */
-  lostMs?: number;
-  /** Keep full output blobs this long (ms). Default 3d. */
-  outputMs?: number;
+  /** Keep succeeded records this many days. Default 7. Fractional days allowed (0.1). */
+  succeededDays?: number;
+  /** Keep failed / timed_out / cancelled records this many days. Default 7. */
+  failedDays?: number;
+  /** Keep lost records this many days. Default 1. */
+  lostDays?: number;
+  /** Keep full output blobs this many days. Default 3. */
+  outputDays?: number;
 };
 
 export type LongTaskConfig = {
-  /** Internal short-poll slices before long_running. Default 4. Not model tool calls. */
-  shortPolls?: number;
-  /** Max wait per short-poll slice (ms). Default 10000. */
-  shortPollTimeoutMs?: number;
   /** Event-driven park cap (ms). Default 1800000 (30m). */
   maxWaitMs?: number;
   /** Refuse end_turn while a long task is running. Default true. */

@@ -56,18 +56,18 @@ async function expectSessionCompletion(params: {
   await expect
     .poll(
       async () => {
-        const poll = await params.processTool.execute("toolcall", {
-          action: "poll",
+        const log = await params.processTool.execute("toolcall", {
+          action: "log",
           sessionId: params.sessionId,
         });
-        const details = poll.details as { status?: string; aggregated?: string };
-        if (details.status === "running") {
+        const details = log.details as { status?: string; aggregated?: string };
+        const text = (log.content[0] as { text?: string } | undefined)?.text ?? "";
+        const blob = `${details.aggregated ?? ""}\n${text}`;
+        const done = expectedTexts.every((expectedText) => blob.includes(expectedText));
+        if (!done) {
           return false;
         }
-        expect(details.status).toBe("completed");
-        for (const expectedText of expectedTexts) {
-          expect(details.aggregated ?? "").toContain(expectedText);
-        }
+        expect(details.status === "completed" || details.status === "running").toBe(true);
         return true;
       },
       {

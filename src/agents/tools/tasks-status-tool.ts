@@ -41,8 +41,7 @@ export function createTasksStatusTool(opts?: { sessionKey?: string }): AnyAgentT
   return {
     label: "Task Status",
     name: "tasks_status",
-    description:
-      "Inspect a long task or this session's active long tasks. Do not process poll to wait.",
+    description: "Inspect a long task or this session's active long tasks.",
     parameters: TasksStatusToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -68,7 +67,7 @@ export function createTasksListTool(opts?: { sessionKey?: string }): AnyAgentToo
   return {
     label: "Task List",
     name: "tasks_list",
-    description: "List this session's long-task ledger. Do not process poll to wait.",
+    description: "List this session's long-task ledger.",
     parameters: TasksListToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;

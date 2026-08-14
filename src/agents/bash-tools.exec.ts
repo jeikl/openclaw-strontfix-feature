@@ -29,6 +29,7 @@ import {
   rejectUnsafeExecControlShellCommand,
 } from "../infra/exec-control-command-guard.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
+import { resolveExecOutputPath } from "../infra/gateway-stop-intent.js";
 import {
   isDangerousHostEnvOverrideVarName,
   isDangerousHostEnvVarName,
@@ -251,8 +252,12 @@ function buildExecForegroundResult(params: {
   outcome: ExecProcessOutcome;
   cwd?: string;
   warningText?: string;
+  sessionId?: string;
+  outputPath?: string;
 }): AgentToolResult<ExecToolDetails> {
   const warningText = params.warningText?.trim() ? `${params.warningText}\n\n` : "";
+  const outputPath =
+    params.outputPath ?? (params.sessionId ? resolveExecOutputPath(params.sessionId) : undefined);
   if (params.outcome.status === "failed") {
     return failedTextResult(`${warningText}${params.outcome.reason}`, {
       status: "failed",
@@ -265,6 +270,8 @@ function buildExecForegroundResult(params: {
       timedOut: params.outcome.timedOut,
       noOutputTimedOut: params.outcome.noOutputTimedOut,
       cwd: params.cwd,
+      sessionId: params.sessionId,
+      outputPath,
     });
   }
   return textResult(`${warningText}${renderExecOutputText(params.outcome.aggregated)}`, {
@@ -276,6 +283,8 @@ function buildExecForegroundResult(params: {
     aggregated: params.outcome.aggregated,
     noOutputTimedOut: params.outcome.noOutputTimedOut,
     cwd: params.cwd,
+    sessionId: params.sessionId,
+    outputPath,
   });
 }
 
@@ -300,9 +309,8 @@ function buildFoldedLongTaskExecResult(params: {
     timedOut: params.result.timedOut,
     cwd: params.cwd,
     sessionId: params.result.sessionId,
+    outputPath: params.result.outputPath,
     folded: true,
-    shortPolls: params.result.shortPolls,
-    shortPollElapsedMs: params.result.shortPollElapsedMs,
     phase: params.result.phase,
     taskStatus: params.result.status,
   };
@@ -1602,7 +1610,7 @@ export function createExecTool(
       }
       return execParams;
     },
-    execute: async (_toolCallId, args, signal, onUpdate) => {
+    execute: async (toolCallId, args, signal, onUpdate) => {
       let params = stripMalformedXmlArgValueSuffixFromKeys(
         args as ExecToolArgs,
         XML_ARG_VALUE_EXEC_PARAM_KEYS,
@@ -2088,9 +2096,8 @@ export function createExecTool(
           yielded = true;
           markBackgrounded(run.session);
           run.disableUpdates();
-          // Runtime owns completion; do not enqueue heartbeat/system-event notify.
-          run.session.notifyOnExit = false;
-          run.session.exitNotified = true;
+          // Keep notifyOnExit so process-exit notify can abort the remaining wait.
+          // maybeNotifyOnExit routes managed sessions to the supervisor, not heartbeat.
           const longTaskCfg = resolveLongTaskConfig(defaults?.config);
           void runLongTaskSupervisor({
             processSessionId: run.session.id,
@@ -2103,6 +2110,8 @@ export function createExecTool(
             agentId,
             pid: run.session.pid,
             startedAt: run.startedAt,
+            toolCallId,
+            outputPath: resolveExecOutputPath(run.session.id),
           })
             .then((folded) => {
               cleanupToolRunListeners();
@@ -2145,6 +2154,8 @@ export function createExecTool(
                 outcome,
                 cwd: run.session.cwd,
                 warningText: getWarningText(),
+                sessionId: run.session.id,
+                outputPath: resolveExecOutputPath(run.session.id),
               }),
             );
           })

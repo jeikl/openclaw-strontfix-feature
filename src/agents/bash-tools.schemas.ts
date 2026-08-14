@@ -66,7 +66,7 @@ export const execSchema = Type.Object({
 /** Parameters accepted by the process-control tool. */
 export const processSchema = Type.Object({
   action: Type.String({
-    description: "Process action (list|poll|log|write|send-keys|submit|paste|kill|clear|remove)",
+    description: "Process action (list|log|write|send-keys|submit|paste|kill|clear|remove)",
   }),
   sessionId: Type.Optional(Type.String({ description: "Session id for actions other than list" })),
   data: Type.Optional(Type.String({ description: "Data to write for write" })),
@@ -82,8 +82,7 @@ export const processSchema = Type.Object({
   limit: Type.Optional(Type.Number({ description: "Log length" })),
   timeout: Type.Optional(
     Type.Number({
-      description:
-        "For poll: wait up to this many milliseconds before returning; max 30000 ms, higher values are clamped to 30000",
+      description: "Optional timeout in milliseconds for process actions that wait on I/O",
       minimum: 0,
     }),
   ),

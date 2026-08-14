@@ -55,7 +55,7 @@ describe("unknown config keys at load time", () => {
     const result = validateConfigObjectRaw({
       tools: {
         longTask: {
-          shortPolls: 4,
+          maxWaitMs: 1800000,
         },
         futureUnknown: true,
       },
@@ -65,7 +65,7 @@ describe("unknown config keys at load time", () => {
     if (!result.ok) {
       return;
     }
-    expect(result.config.tools?.longTask?.shortPolls).toBe(4);
+    expect(result.config.tools?.longTask?.maxWaitMs).toBe(1_800_000);
     const warningPaths = (result.warnings ?? []).map((warning) => warning.path);
     expect(warningPaths).toContain("totallyUnknownRoot");
     expect(warningPaths).toContain("tools.futureUnknown");

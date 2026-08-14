@@ -11,4 +11,5 @@ export { pruneContextMessages } from "./context-pruning/pruner.js";
 export {
   computeEffectiveSettings,
   DEFAULT_CONTEXT_PRUNING_SETTINGS,
+  EXEC_CONTEXT_PRUNE_SOFT_TRIM,
 } from "./context-pruning/settings.js";

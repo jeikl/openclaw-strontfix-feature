@@ -1017,6 +1017,7 @@ export function handleToolExecutionStart(
     const args = evt.args;
     const runId = ctx.params.runId;
     ctx.state.toolExecutionSinceLastBlockReply = true;
+    ctx.state.inFlightToolCount = Math.max(0, (ctx.state.inFlightToolCount ?? 0) + 1);
     emitExecutionPhaseBestEffort(ctx, {
       phase: "tool_execution_started",
       tool: toolName,
@@ -1586,6 +1587,7 @@ export async function handleToolExecutionEnd(
     }
   }
 
+  ctx.state.inFlightToolCount = Math.max(0, (ctx.state.inFlightToolCount ?? 1) - 1);
   endRunStage({
     runId: ctx.params.runId,
     sessionKey: ctx.params.sessionKey,
@@ -1594,14 +1596,27 @@ export async function handleToolExecutionEnd(
     stage: "tool",
     detail: toolName,
   });
-  // Next model call after tools is another first-token wait.
-  beginRunStage({
-    runId: ctx.params.runId,
-    sessionKey: ctx.params.sessionKey,
-    agentId: ctx.params.agentId,
-    sessionId: ctx.params.sessionId,
-    stage: "model_first",
-  });
+  if (ctx.state.inFlightToolCount > 0) {
+    // Other parallel tools are still running; keep the tool stage visible and
+    // do not flash "等待模型首包" until the whole batch settles.
+    beginRunStage({
+      runId: ctx.params.runId,
+      sessionKey: ctx.params.sessionKey,
+      agentId: ctx.params.agentId,
+      sessionId: ctx.params.sessionId,
+      stage: "tool",
+      detail: `${toolName} 已完成`,
+    });
+  } else {
+    // Next model call after the batch is another first-token wait.
+    beginRunStage({
+      runId: ctx.params.runId,
+      sessionKey: ctx.params.sessionKey,
+      agentId: ctx.params.agentId,
+      sessionId: ctx.params.sessionId,
+      stage: "model_first",
+    });
+  }
 
   emitAgentEvent({
     runId: ctx.params.runId,

@@ -296,6 +296,20 @@ export async function runDaemonStart(opts: DaemonLifecycleOptions = {}) {
 
 /** Stop the managed Gateway service or verified unmanaged listener fallback. */
 export async function runDaemonStop(opts: DaemonLifecycleOptions = {}) {
+  const { writeGatewayStopIntent } = await import("../../infra/gateway-stop-intent.js");
+  if (opts.force) {
+    writeGatewayStopIntent({
+      mode: "force",
+      source: "cli.gateway.stop --force",
+    });
+    const { forceStopAllExecLongTasks } = await import("../../agents/long-task-runtime.js");
+    forceStopAllExecLongTasks("cli.gateway.stop --force");
+  } else {
+    writeGatewayStopIntent({
+      mode: "graceful",
+      source: "cli.gateway.stop",
+    });
+  }
   const service = resolveGatewayService();
   let gatewayPortPromise: Promise<number> | undefined;
   return await runServiceStop({

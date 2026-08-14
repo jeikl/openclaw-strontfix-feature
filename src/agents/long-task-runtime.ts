@@ -3,9 +3,22 @@
  * Short-polls and parks without model calls; only a folded terminal result
  * returns to the current turn.
  */
+import fs from "node:fs";
+import path from "node:path";
+import {
+  resolveDefaultSessionStorePath,
+  resolveSessionFilePath,
+} from "../config/sessions/paths.js";
+import { loadSessionStore, resolveSessionStoreEntry } from "../config/sessions/store.js";
+import { appendSessionTranscriptMessage } from "../config/sessions/transcript-append.js";
+import { appendAssistantMessageToSessionTranscript } from "../config/sessions/transcript.runtime.js";
 import { createAbortError, isAbortError } from "../infra/abort-signal.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { readExecOutputLog, resolveExecOutputPath } from "../infra/gateway-stop-intent.js";
+import { requestHeartbeat } from "../infra/heartbeat-wake.js";
+import { enqueueSystemEvent } from "../infra/system-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { isTerminalTaskStatus } from "../tasks/task-executor-policy.js";
 import {
   createTaskRecord,
   listTaskRecords,
@@ -14,7 +27,7 @@ import {
   updateTaskProgressById,
 } from "../tasks/task-registry.js";
 import type { TaskRecord, TaskStatus } from "../tasks/task-registry.types.js";
-import { getSession } from "./bash-process-registry.js";
+import { getFinishedSession, getSession, waitForSessionExit } from "./bash-process-registry.js";
 import type { ExecProcessOutcome } from "./bash-tools.exec-runtime.js";
 import {
   DEFAULT_LONG_TASK_SUMMARY_MAX_CHARS,
@@ -25,14 +38,12 @@ import {
 
 const log = createSubsystemLogger("agents/long-task");
 
-export type LongTaskPhase = "short_polling" | "long_running";
+export type LongTaskPhase = "long_running";
 export type LongTaskTerminalStatus = "succeeded" | "failed" | "timed_out" | "cancelled";
 
 export type LongTaskFoldedResult = {
   status: LongTaskTerminalStatus;
   phase: LongTaskPhase;
-  shortPolls: number;
-  shortPollElapsedMs: number;
   elapsedMs: number;
   exitCode: number | null;
   exitSignal?: string;
@@ -41,6 +52,7 @@ export type LongTaskFoldedResult = {
   summary: string;
   aggregated: string;
   sessionId: string;
+  outputPath?: string;
   pid?: number;
   taskId?: string;
 };
@@ -53,13 +65,30 @@ export type LongTaskWaiter = {
   command: string;
   pid?: number;
   phase: LongTaskPhase;
-  shortPollsDone: number;
-  shortPollElapsedMs: number;
   startedAt: number;
   deadlineAt: number;
   maxWaitMs: number;
   controller: AbortController;
+  /** Resolves when process-exit notify arrives so the remaining wait aborts. */
+  finished: { promise: Promise<void>; resolve: () => void };
+  toolCallId?: string;
+  outputPath?: string;
 };
+
+function createFinishedSignal(): { promise: Promise<void>; resolve: () => void } {
+  let settled = false;
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => {
+    resolve = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      done();
+    };
+  });
+  return { promise, resolve };
+}
 
 const waitersByProcessSession = new Map<string, LongTaskWaiter>();
 const waitersByTaskId = new Map<string, LongTaskWaiter>();
@@ -67,12 +96,12 @@ const waitersBySessionKey = new Map<string, Set<string>>();
 
 export type ExecTaskMeta = {
   phase: LongTaskPhase;
-  shortPolls: number;
-  shortPollElapsedMs: number;
   pid?: number;
   sessionId: string;
   maxWaitMs: number;
   deadlineAt: number;
+  toolCallId?: string;
+  outputPath?: string;
 };
 
 function truncateSummary(value: string, maxChars = DEFAULT_LONG_TASK_SUMMARY_MAX_CHARS): string {
@@ -95,7 +124,7 @@ export function parseExecTaskMeta(
     try {
       const parsed = JSON.parse(raw.slice("longtask ".length)) as ExecTaskMeta;
       if (parsed && typeof parsed.sessionId === "string") {
-        return parsed;
+        return { ...parsed, phase: "long_running" };
       }
     } catch {
       // Fall through to sourceId-only metadata.
@@ -107,12 +136,289 @@ export function parseExecTaskMeta(
   }
   return {
     phase: "long_running",
-    shortPolls: 0,
-    shortPollElapsedMs: 0,
     sessionId,
     maxWaitMs: 0,
     deadlineAt: 0,
   };
+}
+
+/** Wall-clock wait after a gateway restart. Never restarts maxWait from now. */
+export function resolveLongTaskReattachTiming(params: {
+  startedAt?: number;
+  createdAt?: number;
+  maxWaitMs?: number;
+  deadlineAt?: number;
+  now?: number;
+  defaultMaxWaitMs: number;
+}): {
+  startedAt: number;
+  maxWaitMs: number;
+  deadlineAt: number;
+  remainingMs: number;
+  elapsedMs: number;
+} {
+  const now = params.now ?? Date.now();
+  const startedAt =
+    typeof params.startedAt === "number" &&
+    Number.isFinite(params.startedAt) &&
+    params.startedAt > 0
+      ? params.startedAt
+      : typeof params.createdAt === "number" &&
+          Number.isFinite(params.createdAt) &&
+          params.createdAt > 0
+        ? params.createdAt
+        : now;
+  const maxWaitMs =
+    typeof params.maxWaitMs === "number" &&
+    Number.isFinite(params.maxWaitMs) &&
+    params.maxWaitMs > 0
+      ? params.maxWaitMs
+      : params.defaultMaxWaitMs;
+  const deadlineAt =
+    typeof params.deadlineAt === "number" &&
+    Number.isFinite(params.deadlineAt) &&
+    params.deadlineAt > 0
+      ? params.deadlineAt
+      : startedAt + maxWaitMs;
+  return {
+    startedAt,
+    maxWaitMs,
+    deadlineAt,
+    remainingMs: Math.max(0, deadlineAt - now),
+    elapsedMs: Math.max(0, now - startedAt),
+  };
+}
+
+function formatReattachedLongTaskNotice(params: {
+  status: LongTaskTerminalStatus | "lost";
+  elapsedMs: number;
+  command: string;
+  kind: "exit" | "timeout" | "abort" | "lost";
+  outputPath?: string;
+}): string {
+  const seconds = Math.max(0, Math.round(params.elapsedMs / 1000));
+  const head =
+    params.kind === "exit"
+      ? `Long task finished after gateway restart (${seconds}s from original start).`
+      : params.kind === "timeout"
+        ? `Long task timed out after gateway restart (${seconds}s from original start).`
+        : params.kind === "lost"
+          ? `Long task lost after gateway restart (${seconds}s from original start). Backing process is gone.`
+          : `Long task cancelled after gateway restart (${seconds}s from original start).`;
+  const lines = [
+    head,
+    `status: ${params.status}`,
+    `elapsedMs: ${params.elapsedMs}`,
+    `command: ${params.command.slice(0, 160)}`,
+  ];
+  if (params.outputPath) {
+    lines.push(`outputPath: ${params.outputPath}`);
+  }
+  return lines.join("\n");
+}
+
+/** Best-effort process-end time when the pid is already gone after restart. */
+function resolveMissingExecTaskEndedAt(params: {
+  task: TaskRecord;
+  meta: ExecTaskMeta | null;
+  now?: number;
+}): number {
+  const now = params.now ?? Date.now();
+  const started =
+    typeof params.task.startedAt === "number" && params.task.startedAt > 0
+      ? params.task.startedAt
+      : typeof params.task.createdAt === "number" && params.task.createdAt > 0
+        ? params.task.createdAt
+        : 0;
+  const candidates: number[] = [];
+  for (const outputPath of [
+    params.meta?.outputPath,
+    resolveExecOutputPath(params.meta?.sessionId ?? params.task.sourceId ?? ""),
+  ]) {
+    if (!outputPath?.trim()) {
+      continue;
+    }
+    try {
+      const mtimeMs = fs.statSync(outputPath).mtimeMs;
+      if (Number.isFinite(mtimeMs) && mtimeMs > 0) {
+        candidates.push(mtimeMs);
+      }
+    } catch {
+      // Missing output is fine; fall back to discovery time.
+    }
+  }
+  const latest = candidates.length > 0 ? Math.max(...candidates) : now;
+  return Math.min(now, Math.max(started, latest));
+}
+
+function resolveSessionTranscriptPathForTask(task: TaskRecord): string | undefined {
+  const sessionKey = task.requesterSessionKey?.trim();
+  if (!sessionKey) {
+    return undefined;
+  }
+  try {
+    const storePath = resolveDefaultSessionStorePath(task.agentId);
+    const store = loadSessionStore(storePath, { skipCache: true });
+    const resolved = resolveSessionStoreEntry({ store, sessionKey });
+    const entry = resolved.existing;
+    if (!entry?.sessionId) {
+      return undefined;
+    }
+    return resolveSessionFilePath(entry.sessionId, entry, {
+      sessionsDir: path.dirname(storePath),
+      ...(task.agentId ? { agentId: task.agentId } : {}),
+    });
+  } catch {
+    return undefined;
+  }
+}
+
+async function appendReattachedExecToolResult(params: {
+  task: TaskRecord;
+  meta: ExecTaskMeta | null;
+  summary: string;
+  status: LongTaskTerminalStatus | "lost";
+}): Promise<void> {
+  const toolCallId = params.meta?.toolCallId?.trim();
+  const transcriptPath = resolveSessionTranscriptPathForTask(params.task);
+  if (!toolCallId || !transcriptPath) {
+    return;
+  }
+  const outputPath =
+    params.meta?.outputPath?.trim() ||
+    resolveExecOutputPath(params.meta?.sessionId ?? params.task.sourceId ?? "");
+  const recovered =
+    readExecOutputLog(params.meta?.outputPath) || readExecOutputLog(outputPath) || params.summary;
+  const body = recovered || params.summary;
+  const text =
+    outputPath && !body.includes(outputPath) ? `outputPath: ${outputPath}\n\n${body}` : body;
+  const isError = params.status !== "succeeded";
+  try {
+    await appendSessionTranscriptMessage({
+      transcriptPath,
+      message: {
+        role: "toolResult",
+        toolCallId,
+        toolName: "exec",
+        content: [{ type: "text", text: text || params.summary }],
+        details: {
+          status: isError ? "failed" : "completed",
+          folded: true,
+          taskStatus: params.status,
+          sessionId: params.meta?.sessionId ?? params.task.sourceId,
+          taskId: params.task.taskId,
+          ...(outputPath ? { outputPath } : {}),
+        },
+        isError,
+      },
+    });
+  } catch (error) {
+    log.warn("Failed to append reattached exec tool result", {
+      taskId: params.task.taskId,
+      error: formatErrorMessage(error),
+    });
+  }
+}
+
+async function announceReattachedLongTaskTerminal(params: {
+  task: TaskRecord;
+  status: LongTaskTerminalStatus | "lost";
+  elapsedMs: number;
+  kind: "exit" | "timeout" | "abort" | "lost";
+  summary: string;
+  retention: ResolvedLongTaskConfig["retention"];
+  wake: boolean;
+  endedAt?: number;
+}): Promise<void> {
+  persistTerminal({
+    taskId: params.task.taskId,
+    status: params.status,
+    summary: params.summary,
+    error:
+      params.status === "succeeded"
+        ? undefined
+        : params.status === "lost"
+          ? "backing process missing after gateway restart"
+          : params.status,
+    retentionMs: resolveLongTaskRetentionMsForStatus(params.status, params.retention),
+    endedAt: params.endedAt,
+  });
+  const meta = parseExecTaskMeta(params.task);
+  await appendReattachedExecToolResult({
+    task: params.task,
+    meta,
+    summary: params.summary,
+    status: params.status,
+  });
+  const sessionKey = params.task.requesterSessionKey?.trim();
+  if (!sessionKey) {
+    return;
+  }
+  try {
+    enqueueSystemEvent(params.summary, { sessionKey });
+  } catch (error) {
+    log.warn("Failed to enqueue long-task reattach system event", {
+      taskId: params.task.taskId,
+      error: formatErrorMessage(error),
+    });
+  }
+  if (params.wake) {
+    requestHeartbeat({
+      source: "exec-event",
+      intent: "event",
+      reason: "long-task-reattach",
+      coalesceMs: 0,
+      agentId: params.task.agentId,
+      sessionKey,
+    });
+  }
+  try {
+    await appendAssistantMessageToSessionTranscript({
+      agentId: params.task.agentId,
+      sessionKey,
+      text: params.summary,
+      idempotencyKey: `longtask-reattach:${params.task.taskId}:${params.status}`,
+    });
+  } catch (error) {
+    log.warn("Failed to append long-task reattach transcript notice", {
+      taskId: params.task.taskId,
+      error: formatErrorMessage(error),
+    });
+  }
+}
+
+export function forceStopAllExecLongTasks(reason = "gateway-stop-force"): {
+  cancelled: number;
+  killed: number;
+} {
+  const cancelled = cancelAllLongTasks(reason);
+  let killed = 0;
+  const cfg = resolveLongTaskConfig();
+  for (const task of listTaskRecords()) {
+    if (task.runtime !== "exec") {
+      continue;
+    }
+    if (task.status !== "queued" && task.status !== "running") {
+      continue;
+    }
+    const meta = parseExecTaskMeta(task);
+    if (meta?.pid && isPidAlive(meta.pid)) {
+      try {
+        process.kill(meta.pid, "SIGKILL");
+        killed += 1;
+      } catch {
+        // Process may have already exited.
+      }
+    }
+    persistTerminal({
+      taskId: task.taskId,
+      status: "cancelled",
+      summary: `force-stopped by user (${reason})`,
+      error: reason,
+      retentionMs: resolveLongTaskRetentionMsForStatus("cancelled", cfg.retention),
+    });
+  }
+  return { cancelled, killed };
 }
 
 function indexSessionKey(sessionKey: string | undefined, processSessionId: string): void {
@@ -163,6 +469,16 @@ function forgetWaiter(processSessionId: string): LongTaskWaiter | undefined {
 
 export function isProcessSessionLongTaskManaged(processSessionId: string): boolean {
   return waitersByProcessSession.has(processSessionId);
+}
+
+/** Completion notify during park. Aborts the remaining wait. */
+export function notifyLongTaskProcessFinished(processSessionId: string): boolean {
+  const waiter = waitersByProcessSession.get(processSessionId);
+  if (!waiter) {
+    return false;
+  }
+  waiter.finished.resolve();
+  return true;
 }
 
 export function hasActiveLongTaskForSession(sessionKey: string | undefined): boolean {
@@ -235,6 +551,7 @@ function persistCreatedTask(params: {
   agentId?: string;
   command: string;
   processSessionId: string;
+  startedAt?: number;
   meta: ExecTaskMeta;
 }): string | undefined {
   try {
@@ -251,7 +568,7 @@ function persistCreatedTask(params: {
       status: "running",
       deliveryStatus: "not_applicable",
       notifyPolicy: "silent",
-      startedAt: Date.now(),
+      startedAt: params.startedAt ?? Date.now(),
       progressSummary: encodeExecTaskMeta(params.meta),
     });
     return record?.taskId;
@@ -270,12 +587,12 @@ function persistRunningProgress(waiter: LongTaskWaiter): void {
       taskId: waiter.taskId,
       progressSummary: encodeExecTaskMeta({
         phase: waiter.phase,
-        shortPolls: waiter.shortPollsDone,
-        shortPollElapsedMs: waiter.shortPollElapsedMs,
         pid: waiter.pid,
         sessionId: waiter.processSessionId,
         maxWaitMs: waiter.maxWaitMs,
         deadlineAt: waiter.deadlineAt,
+        toolCallId: waiter.toolCallId,
+        outputPath: waiter.outputPath,
       }),
     });
   } catch {
@@ -289,17 +606,19 @@ function persistTerminal(params: {
   summary: string;
   error?: string;
   retentionMs: number;
+  endedAt?: number;
 }): void {
   if (!params.taskId) {
     return;
   }
-  const endedAt = Date.now();
+  const endedAt = params.endedAt ?? Date.now();
   try {
     if (params.status === "lost") {
       markTaskLostById({
         taskId: params.taskId,
         endedAt,
         error: params.error,
+        terminalSummary: params.summary,
         cleanupAfter: endedAt + params.retentionMs,
       });
       return;
@@ -347,8 +666,6 @@ function mapOutcomeStatus(params: {
 
 export function formatFoldedLongTaskText(result: LongTaskFoldedResult): string {
   const lines = [
-    `shortPolls: ${result.shortPolls}`,
-    `shortPollElapsedMs: ${result.shortPollElapsedMs}`,
     `phase: ${result.phase} → ${result.status}`,
     `elapsedMs: ${result.elapsedMs}`,
     `status: ${result.status}`,
@@ -363,13 +680,63 @@ export function formatFoldedLongTaskText(result: LongTaskFoldedResult): string {
   if (result.taskId) {
     lines.push(`taskId: ${result.taskId}`);
   }
+  if (result.outputPath) {
+    lines.push(`outputPath: ${result.outputPath}`);
+  }
   const summary = result.summary.trim();
   lines.push(`summary: ${summary || "(empty)"}`);
   return lines.join("\n");
 }
 
+async function resolveOutcomeAfterNotify(params: {
+  exitPromise: Promise<ExecProcessOutcome>;
+  processSessionId: string;
+}): Promise<ExecProcessOutcome | undefined> {
+  const outcome = await Promise.race([
+    params.exitPromise,
+    new Promise<undefined>((resolve) => {
+      const timer = setTimeout(() => resolve(undefined), 200);
+      timer.unref?.();
+    }),
+  ]);
+  if (outcome) {
+    return outcome;
+  }
+  const finished = getFinishedSession(params.processSessionId);
+  if (!finished) {
+    return undefined;
+  }
+  if (finished.status === "completed") {
+    return {
+      status: "completed",
+      exitCode: finished.exitCode ?? 0,
+      exitSignal: finished.exitSignal ?? null,
+      exitReason: finished.exitReason,
+      durationMs: Math.max(0, finished.endedAt - finished.startedAt),
+      aggregated: finished.aggregated,
+      timedOut: false,
+      noOutputTimedOut: finished.noOutputTimedOut,
+    };
+  }
+  return {
+    status: "failed",
+    exitCode: finished.exitCode ?? null,
+    exitSignal: finished.exitSignal ?? null,
+    exitReason: finished.exitReason,
+    durationMs: Math.max(0, finished.endedAt - finished.startedAt),
+    aggregated: finished.aggregated,
+    timedOut:
+      finished.exitReason === "overall-timeout" || finished.exitReason === "no-output-timeout",
+    noOutputTimedOut: finished.noOutputTimedOut,
+    failureKind: "runtime-error",
+    reason: finished.exitReason ?? finished.status,
+  };
+}
+
 async function waitRace(params: {
   exitPromise: Promise<ExecProcessOutcome>;
+  processSessionId: string;
+  finishedPromise: Promise<void>;
   timeoutMs: number;
   signal: AbortSignal;
 }): Promise<
@@ -384,24 +751,59 @@ async function waitRace(params: {
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
   let onAbort: (() => void) | undefined;
   try {
-    return await new Promise((resolve, reject) => {
-      const finish = (
-        value:
-          | { kind: "exit"; outcome: ExecProcessOutcome }
-          | { kind: "timeout" }
-          | { kind: "abort" },
-      ) => {
-        resolve(value);
-      };
-      onAbort = () => finish({ kind: "abort" });
-      params.signal.addEventListener("abort", onAbort, { once: true });
-      timeoutId = setTimeout(() => finish({ kind: "timeout" }), params.timeoutMs);
-      timeoutId.unref?.();
-      params.exitPromise.then(
-        (outcome) => finish({ kind: "exit", outcome }),
-        (error) => reject(error),
-      );
+    const raced = await new Promise<"exit" | "notified" | "timeout" | "abort" | { error: unknown }>(
+      (resolve) => {
+        let settled = false;
+        const finish = (value: "exit" | "notified" | "timeout" | "abort" | { error: unknown }) => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          resolve(value);
+        };
+        onAbort = () => finish("abort");
+        params.signal.addEventListener("abort", onAbort, { once: true });
+        timeoutId = setTimeout(() => finish("timeout"), params.timeoutMs);
+        timeoutId.unref?.();
+        params.exitPromise.then(
+          () => finish("exit"),
+          (error) => finish({ error }),
+        );
+        void params.finishedPromise.then(() => finish("notified"));
+        const liveSession = getSession(params.processSessionId);
+        const alreadyFinished = getFinishedSession(params.processSessionId);
+        if (alreadyFinished) {
+          finish("notified");
+        } else if (liveSession) {
+          void waitForSessionExit(params.processSessionId, params.timeoutMs, params.signal).then(
+            (kind) => {
+              if (kind === "exit") {
+                finish("notified");
+              } else if (kind === "abort") {
+                finish("abort");
+              }
+            },
+          );
+        }
+      },
+    );
+    if (typeof raced === "object" && "error" in raced) {
+      throw raced.error;
+    }
+    if (raced === "abort") {
+      return { kind: "abort" };
+    }
+    if (raced === "timeout") {
+      return { kind: "timeout" };
+    }
+    const outcome = await resolveOutcomeAfterNotify({
+      exitPromise: params.exitPromise,
+      processSessionId: params.processSessionId,
     });
+    if (!outcome) {
+      return { kind: "timeout" };
+    }
+    return { kind: "exit", outcome };
   } finally {
     if (timeoutId) {
       clearTimeout(timeoutId);
@@ -423,6 +825,8 @@ export type RunLongTaskSupervisorParams = {
   agentId?: string;
   pid?: number;
   startedAt?: number;
+  toolCallId?: string;
+  outputPath?: string;
 };
 
 export async function runLongTaskSupervisor(
@@ -445,27 +849,29 @@ export async function runLongTaskSupervisor(
     agentId: params.agentId,
     command: params.command,
     pid: params.pid,
-    phase: "short_polling",
-    shortPollsDone: 0,
-    shortPollElapsedMs: 0,
+    phase: "long_running",
     startedAt,
     deadlineAt,
     maxWaitMs: cfg.maxWaitMs,
     controller,
+    finished: createFinishedSignal(),
+    toolCallId: params.toolCallId,
+    outputPath: params.outputPath,
   };
   waiter.taskId = persistCreatedTask({
     sessionKey: params.sessionKey,
     agentId: params.agentId,
     command: params.command,
     processSessionId: params.processSessionId,
+    startedAt,
     meta: {
-      phase: "short_polling",
-      shortPolls: 0,
-      shortPollElapsedMs: 0,
+      phase: "long_running",
       pid: params.pid,
       sessionId: params.processSessionId,
       maxWaitMs: cfg.maxWaitMs,
       deadlineAt,
+      toolCallId: params.toolCallId,
+      outputPath: params.outputPath,
     },
   });
   registerWaiter(waiter);
@@ -473,49 +879,19 @@ export async function runLongTaskSupervisor(
   let outcome: ExecProcessOutcome | undefined;
   let cancelled = controller.signal.aborted;
   let timedOut = false;
-  let phase: LongTaskPhase = "short_polling";
+  const phase: LongTaskPhase = "long_running";
 
   try {
-    for (let i = 0; i < cfg.shortPolls; i += 1) {
-      if (controller.signal.aborted) {
-        cancelled = true;
-        break;
-      }
-      const remaining = deadlineAt - Date.now();
-      if (remaining <= 0) {
-        timedOut = true;
-        break;
-      }
-      const sliceMs = Math.min(cfg.shortPollTimeoutMs, remaining);
-      const sliceStarted = Date.now();
-      const raced = await waitRace({
-        exitPromise: params.exitPromise,
-        timeoutMs: sliceMs,
-        signal: controller.signal,
-      });
-      waiter.shortPollsDone = i + 1;
-      waiter.shortPollElapsedMs += Date.now() - sliceStarted;
-      persistRunningProgress(waiter);
-      if (raced.kind === "exit") {
-        outcome = raced.outcome;
-        break;
-      }
-      if (raced.kind === "abort") {
-        cancelled = true;
-        break;
-      }
-    }
-
-    if (!outcome && !cancelled && !timedOut) {
-      phase = "long_running";
-      waiter.phase = "long_running";
-      persistRunningProgress(waiter);
+    persistRunningProgress(waiter);
+    if (!cancelled) {
       const remaining = deadlineAt - Date.now();
       if (remaining <= 0) {
         timedOut = true;
       } else {
         const raced = await waitRace({
           exitPromise: params.exitPromise,
+          processSessionId: params.processSessionId,
+          finishedPromise: waiter.finished.promise,
           timeoutMs: remaining,
           signal: controller.signal,
         });
@@ -543,8 +919,6 @@ export async function runLongTaskSupervisor(
     const result: LongTaskFoldedResult = {
       status,
       phase,
-      shortPolls: waiter.shortPollsDone,
-      shortPollElapsedMs: waiter.shortPollElapsedMs,
       elapsedMs: Date.now() - startedAt,
       exitCode: outcome?.exitCode ?? null,
       exitSignal: outcome?.exitSignal != null ? String(outcome.exitSignal) : undefined,
@@ -553,6 +927,7 @@ export async function runLongTaskSupervisor(
       summary,
       aggregated,
       sessionId: params.processSessionId,
+      outputPath: params.outputPath ?? resolveExecOutputPath(params.processSessionId),
       pid: params.pid,
       taskId: waiter.taskId,
     };
@@ -666,6 +1041,7 @@ export async function watchPidUntilExit(params: {
 export async function reattachPersistedExecLongTasks(cfg?: ResolvedLongTaskConfig): Promise<{
   reattached: number;
   lost: number;
+  forceStopped: boolean;
 }> {
   const resolved = cfg ?? resolveLongTaskConfig();
   let reattached = 0;
@@ -675,7 +1051,7 @@ export async function reattachPersistedExecLongTasks(cfg?: ResolvedLongTaskConfi
     records = listTaskRecords();
   } catch (error) {
     log.warn("Failed to list tasks for long-task reattach", { error: formatErrorMessage(error) });
-    return { reattached, lost };
+    return { reattached, lost, forceStopped: false };
   }
   for (const task of records) {
     if (task.runtime !== "exec") {
@@ -688,6 +1064,13 @@ export async function reattachPersistedExecLongTasks(cfg?: ResolvedLongTaskConfi
       continue;
     }
     const meta = parseExecTaskMeta(task);
+    const timing = resolveLongTaskReattachTiming({
+      startedAt: task.startedAt,
+      createdAt: task.createdAt,
+      maxWaitMs: meta?.maxWaitMs,
+      deadlineAt: meta?.deadlineAt,
+      defaultMaxWaitMs: resolved.maxWaitMs,
+    });
     if (meta?.pid && isPidAlive(meta.pid)) {
       const controller = new AbortController();
       const waiter: LongTaskWaiter = {
@@ -698,29 +1081,62 @@ export async function reattachPersistedExecLongTasks(cfg?: ResolvedLongTaskConfi
         command: task.task,
         pid: meta.pid,
         phase: "long_running",
-        shortPollsDone: meta.shortPolls,
-        shortPollElapsedMs: meta.shortPollElapsedMs,
-        startedAt: task.startedAt ?? task.createdAt,
-        deadlineAt: meta.deadlineAt || Date.now() + resolved.maxWaitMs,
-        maxWaitMs: meta.maxWaitMs || resolved.maxWaitMs,
+        startedAt: timing.startedAt,
+        deadlineAt: timing.deadlineAt,
+        maxWaitMs: timing.maxWaitMs,
         controller,
+        finished: createFinishedSignal(),
+        toolCallId: meta.toolCallId,
+        outputPath: meta.outputPath,
       };
       registerWaiter(waiter);
       reattached += 1;
+      if (task.requesterSessionKey) {
+        void import("../config/sessions/store.js")
+          .then(({ patchSessionEntry }) =>
+            patchSessionEntry({
+              sessionKey: task.requesterSessionKey,
+              agentId: task.agentId,
+              update: (entry) => ({
+                ...entry,
+                status: "running",
+                endedAt: undefined,
+              }),
+            }),
+          )
+          .catch((error) => {
+            log.warn("Failed to restore session run after long-task reattach", {
+              taskId: task.taskId,
+              error: formatErrorMessage(error),
+            });
+          });
+      }
       void watchPidUntilExit({
         pid: meta.pid,
-        timeoutMs: Math.max(0, waiter.deadlineAt - Date.now()),
+        timeoutMs: timing.remainingMs,
         signal: controller.signal,
       })
-        .then((kind) => {
+        .then(async (kind) => {
           const status: LongTaskTerminalStatus | "lost" =
             kind === "abort" ? "cancelled" : kind === "timeout" ? "timed_out" : "succeeded";
-          persistTerminal({
-            taskId: task.taskId,
+          const elapsedMs = Date.now() - timing.startedAt;
+          const summary = formatReattachedLongTaskNotice({
             status,
-            summary: kind === "exit" ? "exited after gateway reattach" : kind,
-            error: status === "succeeded" ? undefined : status,
-            retentionMs: resolveLongTaskRetentionMsForStatus(status, resolved.retention),
+            elapsedMs,
+            command: task.task,
+            kind,
+            outputPath:
+              meta.outputPath?.trim() ||
+              resolveExecOutputPath(meta.sessionId || task.sourceId || ""),
+          });
+          await announceReattachedLongTaskTerminal({
+            task,
+            status,
+            elapsedMs,
+            kind,
+            summary,
+            retention: resolved.retention,
+            wake: true,
           });
         })
         .catch((error) => {
@@ -734,9 +1150,31 @@ export async function reattachPersistedExecLongTasks(cfg?: ResolvedLongTaskConfi
         });
       continue;
     }
-    // Leave missing-pid tasks for the sweeper grace window, then lost.
+    // Pid is already gone. Do not leave the ledger running for the sweeper
+    // grace window — elapsed would keep growing against a dead shell.
+    lost += 1;
+    const endedAt = resolveMissingExecTaskEndedAt({ task, meta });
+    const elapsedMs = Math.max(0, endedAt - timing.startedAt);
+    const summary = formatReattachedLongTaskNotice({
+      status: "lost",
+      elapsedMs,
+      command: task.task,
+      kind: "lost",
+      outputPath:
+        meta?.outputPath?.trim() || resolveExecOutputPath(meta?.sessionId ?? task.sourceId ?? ""),
+    });
+    await announceReattachedLongTaskTerminal({
+      task,
+      status: "lost",
+      elapsedMs,
+      kind: "lost",
+      summary,
+      retention: resolved.retention,
+      wake: true,
+      endedAt,
+    });
   }
-  return { reattached, lost };
+  return { reattached, lost, forceStopped: false };
 }
 
 export function markStaleExecTaskLost(
@@ -777,6 +1215,7 @@ export function listLongTaskWaitersForTests(): LongTaskWaiter[] {
 
 export function formatLongTaskQueryRecord(task: TaskRecord): {
   taskId: string;
+  runtime: TaskRecord["runtime"];
   status: TaskStatus;
   phase?: LongTaskPhase;
   command: string;
@@ -785,13 +1224,14 @@ export function formatLongTaskQueryRecord(task: TaskRecord): {
   pid?: number;
   summary?: string;
 } {
-  const meta = parseExecTaskMeta(task);
+  const meta = task.runtime === "exec" ? parseExecTaskMeta(task) : null;
   const now = Date.now();
   const started = task.startedAt ?? task.createdAt;
   return {
     taskId: task.taskId,
+    runtime: task.runtime,
     status: task.status,
-    phase: meta?.phase,
+    ...(meta?.phase && !isTerminalTaskStatus(task.status) ? { phase: meta.phase } : {}),
     command: task.task,
     elapsedMs: Math.max(0, (task.endedAt ?? now) - started),
     sessionId: meta?.sessionId ?? task.sourceId,

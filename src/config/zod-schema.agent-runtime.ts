@@ -1126,16 +1126,14 @@ export const ToolsSchema = z
     exec: ToolExecSchema,
     longTask: z
       .object({
-        shortPolls: z.number().int().min(1).max(20).optional(),
-        shortPollTimeoutMs: z.number().int().min(100).max(60_000).optional(),
         maxWaitMs: z.number().int().min(1000).max(86_400_000).optional(),
         blockEndTurn: z.boolean().optional(),
         retention: z
           .object({
-            succeededMs: z.number().int().nonnegative().optional(),
-            failedMs: z.number().int().nonnegative().optional(),
-            lostMs: z.number().int().nonnegative().optional(),
-            outputMs: z.number().int().nonnegative().optional(),
+            succeededDays: z.number().nonnegative().max(3650).optional(),
+            failedDays: z.number().nonnegative().max(3650).optional(),
+            lostDays: z.number().nonnegative().max(3650).optional(),
+            outputDays: z.number().nonnegative().max(3650).optional(),
           })
           .strict()
           .optional(),

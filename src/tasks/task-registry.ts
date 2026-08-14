@@ -1683,6 +1683,7 @@ export function markTaskLostById(params: {
   lastEventAt?: number;
   error?: string;
   cleanupAfter?: number;
+  terminalSummary?: string | null;
 }): TaskRecord | null {
   ensureTaskRegistryReady();
   return updateTask(params.taskId, {
@@ -1691,6 +1692,9 @@ export function markTaskLostById(params: {
     lastEventAt: params.lastEventAt ?? params.endedAt,
     ...(params.error !== undefined ? { error: params.error } : {}),
     ...(params.cleanupAfter !== undefined ? { cleanupAfter: params.cleanupAfter } : {}),
+    ...(params.terminalSummary !== undefined
+      ? { terminalSummary: normalizeTaskSummary(params.terminalSummary) }
+      : {}),
   });
 }
 

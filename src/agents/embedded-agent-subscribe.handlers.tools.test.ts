@@ -94,6 +94,7 @@ function createTestContext(): {
       successfulCronAdds: 0,
       deterministicApprovalPromptSent: false,
       toolExecutionSinceLastBlockReply: false,
+      inFlightToolCount: 0,
       assistantMessageIndex: 0,
     },
     shouldEmitToolResult: () => false,

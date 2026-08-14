@@ -36,7 +36,6 @@ import {
   truncateMiddle,
 } from "./bash-tools.shared.js";
 import { recordCommandPoll, resetCommandPollCount } from "./command-poll-backoff.js";
-import { isProcessSessionLongTaskManaged } from "./long-task-runtime.js";
 import { encodePaste } from "./pty-keys.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { PROCESS_TOOL_DISPLAY_SUMMARY } from "./tool-description-presets.js";
@@ -73,8 +72,6 @@ function defaultTailNote(totalLines: number, usingDefaultTail: boolean) {
   return `\n\n[showing last ${DEFAULT_LOG_TAIL_LINES} of ${totalLines} lines; pass offset/limit to page]`;
 }
 
-const MAX_POLL_WAIT_MS = 30_000;
-
 type RunningSessionRuntime = {
   stdinWritable: boolean;
   waitingForInput: boolean;
@@ -103,19 +100,6 @@ function runningSessionInputDetails(runtime: RunningSessionRuntime) {
     idleMs: runtime.idleMs,
     lastOutputAt: runtime.lastOutputAt,
   };
-}
-
-function resolvePollWaitMs(value: unknown) {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return Math.max(0, Math.min(MAX_POLL_WAIT_MS, Math.floor(value)));
-  }
-  if (typeof value === "string" && /^[+-]?\d+$/.test(value.trim())) {
-    const parsed = Number(value.trim());
-    if (Number.isSafeInteger(parsed)) {
-      return Math.max(0, Math.min(MAX_POLL_WAIT_MS, parsed));
-    }
-  }
-  return 0;
 }
 
 function failText(text: string): AgentToolResult<unknown> {
@@ -356,132 +340,9 @@ export function createProcessTool(
 
       switch (params.action) {
         case "poll": {
-          if (isProcessSessionLongTaskManaged(params.sessionId)) {
-            return failText(
-              `Session ${params.sessionId} is owned by the long-task runtime. Waiting is handled internally; do not process poll. Use tasks_status or /status to inspect.`,
-            );
-          }
-          if (!scopedSession) {
-            if (scopedFinished) {
-              resetPollRetrySuggestion(params.sessionId);
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text:
-                      (scopedFinished.tail ||
-                        `(no output recorded${
-                          scopedFinished.truncated ? " — truncated to cap" : ""
-                        })`) +
-                      `\n\nProcess exited with ${
-                        scopedFinished.exitSignal
-                          ? `signal ${scopedFinished.exitSignal}`
-                          : `code ${scopedFinished.exitCode ?? 0}`
-                      }.`,
-                  },
-                ],
-                details: {
-                  status: scopedFinished.status === "completed" ? "completed" : "failed",
-                  sessionId: params.sessionId,
-                  exitCode: scopedFinished.exitCode ?? undefined,
-                  ...(scopedFinished.exitSignal != null
-                    ? { exitSignal: scopedFinished.exitSignal }
-                    : {}),
-                  ...(scopedFinished.exitReason
-                    ? {
-                        exitReason: scopedFinished.exitReason,
-                        timedOut:
-                          scopedFinished.exitReason === "overall-timeout" ||
-                          scopedFinished.exitReason === "no-output-timeout",
-                      }
-                    : {}),
-                  ...(scopedFinished.noOutputTimedOut !== undefined
-                    ? { noOutputTimedOut: scopedFinished.noOutputTimedOut }
-                    : {}),
-                  aggregated: scopedFinished.aggregated,
-                  name: deriveSessionName(scopedFinished.command),
-                },
-              };
-            }
-            resetPollRetrySuggestion(params.sessionId);
-            return failText(`No session found for ${params.sessionId}`);
-          }
-          if (!scopedSession.backgrounded) {
-            return failText(`Session ${params.sessionId} is not backgrounded.`);
-          }
-          const pollWaitMs = resolvePollWaitMs(params.timeout);
-          if (pollWaitMs > 0 && !scopedSession.exited) {
-            const waited = await waitForSessionExit(scopedSession.id, pollWaitMs, signal);
-            if (waited === "abort") {
-              throw createAbortError(signal?.reason);
-            }
-          }
-          const { stdout, stderr } = drainSession(scopedSession);
-          const exited = scopedSession.exited;
-          const exitCode = scopedSession.exitCode ?? 0;
-          const exitSignal = scopedSession.exitSignal ?? undefined;
-          if (exited) {
-            const status = exitCode === 0 && exitSignal == null ? "completed" : "failed";
-            markExited(
-              scopedSession,
-              scopedSession.exitCode ?? null,
-              scopedSession.exitSignal ?? null,
-              status,
-              scopedSession.exitReason,
-              scopedSession.noOutputTimedOut,
-            );
-          }
-          const status = exited
-            ? exitCode === 0 && exitSignal == null
-              ? "completed"
-              : "failed"
-            : "running";
-          const output = [stdout.trimEnd(), stderr.trimEnd()].filter(Boolean).join("\n").trim();
-          const hasNewOutput = output.length > 0;
-          const retryInMs = exited
-            ? undefined
-            : recordPollRetrySuggestion(params.sessionId, hasNewOutput);
-          if (exited) {
-            resetPollRetrySuggestion(params.sessionId);
-          }
-          const runtime = exited ? undefined : describeRunningSession(scopedSession);
-          return {
-            content: [
-              {
-                type: "text",
-                text:
-                  (output || "(no new output)") +
-                  (exited
-                    ? `\n\nProcess exited with ${
-                        exitSignal ? `signal ${exitSignal}` : `code ${exitCode}`
-                      }.`
-                    : buildInputWaitHint(runtime) || "\n\nProcess still running."),
-              },
-            ],
-            details: {
-              status,
-              sessionId: params.sessionId,
-              exitCode: exited ? exitCode : undefined,
-              ...(exited && scopedSession.exitSignal != null
-                ? { exitSignal: scopedSession.exitSignal }
-                : {}),
-              ...(exited && scopedSession.exitReason
-                ? {
-                    exitReason: scopedSession.exitReason,
-                    timedOut:
-                      scopedSession.exitReason === "overall-timeout" ||
-                      scopedSession.exitReason === "no-output-timeout",
-                  }
-                : {}),
-              ...(exited && scopedSession.noOutputTimedOut !== undefined
-                ? { noOutputTimedOut: scopedSession.noOutputTimedOut }
-                : {}),
-              aggregated: scopedSession.aggregated,
-              name: deriveSessionName(scopedSession.command),
-              ...(runtime ? runningSessionInputDetails(runtime) : {}),
-              ...(typeof retryInMs === "number" ? { retryInMs } : {}),
-            },
-          };
+          return failText(
+            "process poll is removed. Exec waits internally until the command finishes. Use tasks_status or tasks_list to inspect, or process log/kill for output and intervention.",
+          );
         }
 
         case "log": {
