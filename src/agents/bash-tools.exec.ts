@@ -89,13 +89,8 @@ import {
   truncateMiddle,
 } from "./bash-tools.shared.js";
 import { createModelExecAutoReviewer } from "./exec-auto-reviewer.js";
-import { resolveLongTaskConfig } from "./long-task-config.js";
-import {
-  cancelLongTaskByProcessSession,
-  formatFoldedLongTaskText,
-  isProcessSessionLongTaskManaged,
-  runLongTaskSupervisor,
-} from "./long-task-runtime.js";
+import { resolveLongTaskConfig, resolveLongTaskProcessTimeoutSec } from "./long-task-config.js";
+import { formatFoldedLongTaskText, runLongTaskSupervisor } from "./long-task-runtime.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { EXEC_TOOL_DISPLAY_SUMMARY } from "./tool-description-presets.js";
 import { type AgentToolWithMeta, failedTextResult, textResult } from "./tools/common.js";
@@ -1355,14 +1350,10 @@ export function createExecTool(
   const defaultBackgroundMs = clampWithDefault(
     defaults?.backgroundMs ?? readEnvInt("OPENCLAW_BASH_YIELD_MS", "PI_BASH_YIELD_MS"),
     10_000,
-    10,
+    0,
     120_000,
   );
   const allowBackground = defaults?.allowBackground ?? true;
-  const defaultTimeoutSec =
-    typeof defaults?.timeoutSec === "number" && defaults.timeoutSec > 0
-      ? defaults.timeoutSec
-      : 1800;
   const defaultPathPrepend = normalizePathPrepend(defaults?.pathPrepend);
   const {
     safeBins,
@@ -1629,22 +1620,14 @@ export function createExecTool(
       }
       const startedAt = Date.now();
       let execCommandOverride: string | undefined;
-      const backgroundRequested = params.background === true;
-      const yieldRequested = typeof params.yieldMs === "number";
-      const foregroundFallbackWarning =
-        !allowBackground && (backgroundRequested || yieldRequested)
-          ? "Warning: background execution is disabled; running synchronously."
-          : undefined;
+      const longTaskCfg = resolveLongTaskConfig(defaults?.config);
+      // Model yieldMs/background/timeout do not control wait or process lifetime.
+      // Park after the configured tools.exec.backgroundMs; wait/kill use maxWaitMs.
+      const foregroundFallbackWarning = undefined;
       const yieldWindow = allowBackground
-        ? backgroundRequested
-          ? 0
-          : clampWithDefault(
-              params.yieldMs ?? defaultBackgroundMs,
-              defaultBackgroundMs,
-              10,
-              120_000,
-            )
+        ? clampWithDefault(defaultBackgroundMs, 10_000, 0, 120_000)
         : null;
+      const effectiveTimeoutSec = resolveLongTaskProcessTimeoutSec(longTaskCfg.maxWaitMs);
       const elevatedDefaults = defaults?.elevated;
       const elevatedAllowed = Boolean(elevatedDefaults?.enabled && elevatedDefaults.allowed);
       const elevatedDefaultMode =
@@ -1930,8 +1913,8 @@ export function createExecTool(
             strictInlineEval: defaults?.strictInlineEval,
             commandHighlighting: defaults?.commandHighlighting,
             trigger: defaults?.trigger,
-            timeoutSec: params.timeout,
-            defaultTimeoutSec,
+            timeoutSec: effectiveTimeoutSec,
+            defaultTimeoutSec: effectiveTimeoutSec,
             approvalRunningNoticeMs,
             warnings,
             foregroundWarnings: foregroundFallbackWarning ? [foregroundFallbackWarning] : [],
@@ -1953,8 +1936,8 @@ export function createExecTool(
             pathPrepend: defaultPathPrepend,
             requestedEnv,
             pty: params.pty === true && !sandbox,
-            timeoutSec: params.timeout,
-            defaultTimeoutSec,
+            timeoutSec: effectiveTimeoutSec,
+            defaultTimeoutSec: effectiveTimeoutSec,
             security,
             ask,
             autoReview,
@@ -2003,8 +1986,7 @@ export function createExecTool(
           warnings.push(foregroundFallbackWarning);
         }
 
-        const explicitTimeoutSec = typeof params.timeout === "number" ? params.timeout : null;
-        effectiveTimeout = explicitTimeoutSec ?? defaultTimeoutSec;
+        effectiveTimeout = effectiveTimeoutSec;
         const usePty = params.pty === true && !sandbox;
 
         // Preflight: catch a common model failure mode (shell syntax leaking into Python/JS sources)
@@ -2049,25 +2031,11 @@ export function createExecTool(
       let yieldTimer: NodeJS.Timeout | null = null;
       let registeredAbortSignal: AbortSignal | null = null;
 
-      // Tool-call abort should not kill unmanaged backgrounded sessions; long-task
-      // park owns the abort and must tear down the wait plus the process.
+      // Tool-call abort (idle watchdog, run timeout, dropped stream) must not
+      // kill exec. Wait and process lifetime belong to tools.longTask.maxWaitMs.
+      // User /stop /clear /new cancel via cancelLongTasksForSession instead.
       const onAbortSignal = () => {
-        // Immediately suppress onUpdate calls so that any late stdout/stderr
-        // from the still-running process cannot push a rejected Promise into
-        // agent runtime's updateEvents after the agent run has ended (#62520).
-        // Intentionally placed *before* the yielded/backgrounded guard: the
-        // agent run is ending regardless, so no consumer exists for further
-        // tool_execution_update events even for backgrounded sessions (which
-        // retrieve output via process poll/log instead of onUpdate callbacks).
         run.disableUpdates();
-        if (isProcessSessionLongTaskManaged(run.session.id)) {
-          cancelLongTaskByProcessSession(run.session.id, "aborted");
-          return;
-        }
-        if (yielded || run.session.backgrounded) {
-          return;
-        }
-        run.kill();
       };
 
       const cleanupToolRunListeners = () => {
@@ -2098,13 +2066,11 @@ export function createExecTool(
           run.disableUpdates();
           // Keep notifyOnExit so process-exit notify can abort the remaining wait.
           // maybeNotifyOnExit routes managed sessions to the supervisor, not heartbeat.
-          const longTaskCfg = resolveLongTaskConfig(defaults?.config);
           void runLongTaskSupervisor({
             processSessionId: run.session.id,
             command: params.command,
             exitPromise: run.promise,
             kill: () => run.kill(),
-            signal,
             config: longTaskCfg,
             sessionKey: notifySessionKey ?? defaults?.sessionKey,
             agentId,

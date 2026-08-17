@@ -48,6 +48,9 @@ See [Configuration - agents](/gateway/config-agents) for:
 Tool policy, experimental toggles, provider-backed tool config, and custom
 provider / base-URL setup live in
 [Configuration - tools and custom providers](/gateway/config-tools).
+Long-exec wait and process lifetime live under `tools.longTask`
+(`maxWaitMs` is the sole cap; model `timeout` / `yieldMs` / `background` are
+ignored). See [Exec](/tools/exec) and [Background process](/gateway/background-process).
 
 ## Models
 
@@ -1171,8 +1174,8 @@ rows. Query them with [`openclaw audit`](/cli/audit) or the
 
 - `enabled`: master toggle for instrumentation output (default: `true`).
 - `flags`: array of flag strings enabling targeted log output (supports wildcards like `"telegram.*"` or `"*"`).
-- `stuckSessionWarnMs`: no-progress age threshold in ms for classifying long-running processing sessions as `session.long_running`, `session.stalled`, or `session.stuck` (default: `120000`). Reply, tool, status, block, and ACP progress reset the timer; repeated `session.stuck` diagnostics back off while unchanged.
-- `stuckSessionAbortMs`: no-progress age threshold in ms before eligible stalled active work may be abort-drained for recovery. When unset, OpenClaw uses the safer extended embedded-run window of at least 5 minutes and 3x `stuckSessionWarnMs`.
+- `stuckSessionWarnMs`: no-progress age threshold in ms for classifying long-running processing sessions as `session.long_running`, `session.stalled`, or `session.stuck` (default: `120000`). Reply, tool, status, block, and ACP progress reset the timer; repeated `session.stuck` diagnostics back off while unchanged. An in-flight long `exec` stays `session.long_running` / `active_long_task`.
+- `stuckSessionAbortMs`: no-progress age threshold in ms before eligible stalled active work may be abort-drained for recovery. When unset, OpenClaw uses the safer extended embedded-run window of at least 5 minutes and 3x `stuckSessionWarnMs`. Sessions waiting on a long exec under `tools.longTask` are not abort-drained; only `/stop` `/clear` `/new` or `maxWaitMs` end that wait.
 - `memoryPressureSnapshot`: captures a redacted pre-OOM stability snapshot when memory pressure reaches `critical` (default: `false`). Set to `true` to add the stability bundle file scan/write while keeping normal memory pressure events.
 - `otel.enabled`: enables the OpenTelemetry export pipeline (default: `false`). For the full configuration, signal catalog, and privacy model, see [OpenTelemetry export](/gateway/opentelemetry).
 - `otel.endpoint`: collector URL for OTel export.

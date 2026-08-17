@@ -213,6 +213,51 @@ Controls elevated exec access outside the sandbox:
 
 Values shown are defaults except `applyPatch.allowModels` (empty/unset by default, meaning any compatible model may use `apply_patch`). `approvalRunningNoticeMs` emits a running notice when approval-backed exec runs long; `0` disables it.
 
+- `backgroundMs`: how long to watch in the foreground before handing the command to the runtime wait. Default `10000`. `0` parks immediately. This is config only — the model `yieldMs` / `background` arguments are ignored.
+- `timeoutSec`: legacy key. Exec wait and process lifetime now follow `tools.longTask.maxWaitMs`; the per-call `timeout` argument is ignored.
+
+### `tools.longTask`
+
+Sole wait and process-lifetime policy for long `exec` work. Model `timeout` / `yieldMs` / `background` are ignored so a one-second model argument cannot kill a 30-minute command.
+
+```json5
+{
+  tools: {
+    longTask: {
+      maxWaitMs: 1800000,
+      blockEndTurn: true,
+      retention: {
+        succeededDays: 7,
+        failedDays: 7,
+        lostDays: 1,
+        outputDays: 3,
+      },
+    },
+  },
+}
+```
+
+<ParamField path="maxWaitMs" type="number" default="1800000">
+  Sole wait cap and process lifetime for exec (30 minutes). When this deadline hits, the runtime marks the task `timed_out` and kills the process. Only `/stop` `/clear` `/new` (or `gateway stop --force`) can cancel earlier. Diagnostic stuck-session recovery, the LLM idle watchdog, and tool abort signals do not.
+</ParamField>
+<ParamField path="blockEndTurn" type="boolean" default="true">
+  Refuse to end the agent turn while a long exec is still running.
+</ParamField>
+<ParamField path="retention.succeededDays" type="number" default="7">
+  How many days to keep succeeded task records.
+</ParamField>
+<ParamField path="retention.failedDays" type="number" default="7">
+  How many days to keep failed / timed_out / cancelled records.
+</ParamField>
+<ParamField path="retention.lostDays" type="number" default="1">
+  How many days to keep lost records (backing pid already dead at startup).
+</ParamField>
+<ParamField path="retention.outputDays" type="number" default="3">
+  How many days to keep the full on-disk exec output files.
+</ParamField>
+
+A bounded `agents.defaults.timeoutSeconds` is raised to at least `maxWaitMs` so the whole-run clock cannot expire first. Explicit `0` (no timeout) and values already longer than `maxWaitMs` are unchanged. See [Exec](/tools/exec) and [Background process](/gateway/background-process).
+
 ### `tools.loopDetection`
 
 Tool-loop safety checks are **disabled by default**. Set `enabled: true` to activate detection. Settings can be defined globally in `tools.loopDetection` and overridden per-agent at `agents.list[].tools.loopDetection`.

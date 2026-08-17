@@ -682,7 +682,7 @@ describe("exec approvals", () => {
     });
 
     expect(result.details.status).toBe("completed");
-    expect(getResultText(result)).toContain(
+    expect(getResultText(result)).not.toContain(
       "Warning: background execution is disabled; running synchronously.",
     );
     expect(getResultText(result)).toContain("node-ok");

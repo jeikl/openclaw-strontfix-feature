@@ -1,6 +1,7 @@
 // Diagnostic logger records structured runtime events, timings, and health snapshots.
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
 import { resolveCompactionTimeoutMs } from "../agents/embedded-agent-runner/compaction-safety-timeout.js";
+import { hasActiveLongTaskForSession } from "../agents/long-task-runtime.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -515,7 +516,14 @@ function isBlockedToolCallRecoveryEligible(params: {
   classification: SessionAttentionClassification | undefined;
   activity?: DiagnosticSessionActivitySnapshot;
   stuckSessionAbortMs: number;
+  sessionKey?: string;
 }): boolean {
+  if (hasActiveLongTaskForSession(params.sessionKey)) {
+    return false;
+  }
+  if (params.activity?.activeToolName?.trim().toLowerCase() === "exec") {
+    return false;
+  }
   const toolAgeMs = params.activity?.activeToolAgeMs;
   const lastProgressAgeMs = params.activity?.lastProgressAgeMs;
   return (
@@ -551,7 +559,11 @@ function isActiveAbortRecoveryEligible(params: {
   classification: SessionAttentionClassification | undefined;
   activity?: DiagnosticSessionActivitySnapshot;
   stuckSessionAbortMs: number;
+  sessionKey?: string;
 }): boolean {
+  if (hasActiveLongTaskForSession(params.sessionKey)) {
+    return false;
+  }
   return (
     isStalledEmbeddedRunRecoveryEligible(params) ||
     isBlockedToolCallRecoveryEligible(params) ||
@@ -1007,12 +1019,14 @@ export function logSessionAttention(
   );
   const stuckSessionAbortMs =
     params.abortThresholdMs ?? resolveStalledEmbeddedRunAbortMs(params.thresholdMs);
+  const hasActiveLongTask = hasActiveLongTaskForSession(state.sessionKey ?? params.sessionKey);
   const classification = classifySessionAttention({
     state: state.state as "idle" | "processing" | "waiting" | undefined,
     queueDepth: state.queueDepth,
     activity,
     staleMs: params.thresholdMs,
     stuckSessionAbortMs,
+    hasActiveLongTask,
   });
   const recoveryEligible =
     classification.recoveryEligible ||
@@ -1020,6 +1034,7 @@ export function logSessionAttention(
       classification,
       activity,
       stuckSessionAbortMs,
+      sessionKey: state.sessionKey ?? params.sessionKey,
     });
   // The warning backoff throttles repeated log lines/events only. It must never
   // gate recovery: a recovery-eligible session has to return its classification
@@ -1325,6 +1340,7 @@ export function startDiagnosticHeartbeat(
             classification,
             activity,
             stuckSessionAbortMs,
+            sessionKey: state.sessionKey,
           })
         ) {
           requestStuckSessionRecovery({

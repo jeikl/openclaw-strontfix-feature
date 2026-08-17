@@ -6,42 +6,41 @@ read_when:
 title: "Background exec and process tool"
 ---
 
-OpenClaw runs shell commands through the `exec` tool and keeps long-running tasks in memory. The `process` tool manages those background sessions.
+OpenClaw runs shell commands through the `exec` tool. The runtime waits internally until the command finishes or `tools.longTask.maxWaitMs` expires, then returns one folded result. The `process` tool is for logs, stdin, or kill — not as a wait loop.
 
 ## exec tool
 
 Parameters:
 
-| Parameter    | Description                                                                                                                                            |
-| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `command`    | Required. Shell command to run.                                                                                                                        |
-| `workdir`    | Working directory; omit to use the default cwd.                                                                                                        |
-| `env`        | Extra environment variables for the command.                                                                                                           |
-| `yieldMs`    | Milliseconds to wait before backgrounding (default 10000).                                                                                             |
-| `background` | Run in background immediately.                                                                                                                         |
-| `timeout`    | Timeout in seconds (default `tools.exec.timeoutSec`); kills the process on expiry. Set `timeout: 0` to disable the exec process timeout for that call. |
-| `pty`        | Run in a pseudo-terminal when available (TTY-required CLIs, coding agents).                                                                            |
-| `elevated`   | Run outside the sandbox if elevated mode is enabled/allowed (`gateway` by default, or `node` when the exec target is `node`).                          |
-| `host`       | Exec target: `auto`, `sandbox`, `gateway`, or `node`.                                                                                                  |
-| `node`       | Node id/name, used with `host: "node"`.                                                                                                                |
+| Parameter    | Description                                                                                                                   |
+| ------------ | ----------------------------------------------------------------------------------------------------------------------------- |
+| `command`    | Required. Shell command to run.                                                                                               |
+| `workdir`    | Working directory; omit to use the default cwd.                                                                               |
+| `env`        | Extra environment variables for the command.                                                                                  |
+| `yieldMs`    | Ignored. Park timing is `tools.exec.backgroundMs`.                                                                            |
+| `background` | Ignored. Park timing is `tools.exec.backgroundMs`.                                                                            |
+| `timeout`    | Ignored. Process lifetime is `tools.longTask.maxWaitMs`.                                                                      |
+| `pty`        | Run in a pseudo-terminal when available (TTY-required CLIs, coding agents).                                                   |
+| `elevated`   | Run outside the sandbox if elevated mode is enabled/allowed (`gateway` by default, or `node` when the exec target is `node`). |
+| `host`       | Exec target: `auto`, `sandbox`, `gateway`, or `node`.                                                                         |
+| `node`       | Node id/name, used with `host: "node"`.                                                                                       |
 
 Behavior:
 
-- Foreground runs return output directly.
-- When backgrounded (explicit or via `yieldMs` timeout), the tool returns `status: "running"` + `sessionId` and a short output tail.
-- Backgrounded and `yieldMs` runs inherit `tools.exec.timeoutSec` unless the call passes an explicit `timeout`.
-- Output stays in memory until the session is polled or cleared.
-- If the `process` tool is disallowed, `exec` runs synchronously and ignores `yieldMs`/`background`.
+- Call `exec` once. The runtime waits (event-driven, up to `maxWaitMs`) and returns one folded tool result.
+- Foreground watch duration is `tools.exec.backgroundMs` (default 10s, `0` parks immediately). Then the runtime parks until exit, cancel, or `maxWaitMs`.
+- Model `timeout` / `yieldMs` / `background` do not control wait or process lifetime.
+- `/stop` `/clear` `/new` cancel the wait and kill the process. Diagnostic stuck-session recovery and the LLM idle watchdog do not.
+- If the `process` tool is disallowed, `exec` still runs to completion under the same wait.
 - Spawned exec commands receive `OPENCLAW_SHELL=exec` for context-aware shell/profile rules.
-- For long-running work that starts now: start it once and rely on automatic completion wake (when enabled) once the command emits output or fails.
-- If automatic completion wake is unavailable, or you need quiet-success confirmation for a command that exits cleanly with no output, poll with `process`.
 - Don't emulate reminders or delayed follow-ups with `sleep` loops or repeated polling — use cron for future work.
+- Don't process-poll to wait. Use `tasks_status` / `tasks_list` to inspect.
 
 ### Env overrides
 
 | Variable                                 | Effect                                                                                                           |
 | ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `OPENCLAW_BASH_YIELD_MS`                 | Default yield before backgrounding (ms). Default 10000, clamped 10-120000.                                       |
+| `OPENCLAW_BASH_YIELD_MS`                 | Default foreground watch before runtime park (ms). Default 10000, clamped 0-120000.                              |
 | `OPENCLAW_BASH_MAX_OUTPUT_CHARS`         | In-memory output cap (chars).                                                                                    |
 | `OPENCLAW_BASH_PENDING_MAX_OUTPUT_CHARS` | Pending stdout/stderr cap per stream (chars).                                                                    |
 | `OPENCLAW_BASH_JOB_TTL_MS`               | TTL for finished sessions (ms), bounded to 1m-3h.                                                                |
@@ -51,8 +50,9 @@ Behavior:
 
 | Key                                   | Default | Effect                                                                          |
 | ------------------------------------- | ------- | ------------------------------------------------------------------------------- |
-| `tools.exec.backgroundMs`             | 10000   | Same as `OPENCLAW_BASH_YIELD_MS`.                                               |
-| `tools.exec.timeoutSec`               | 1800    | Default per-call timeout.                                                       |
+| `tools.longTask.maxWaitMs`            | 1800000 | Sole wait and process-lifetime cap. Model `timeout`/`yieldMs` are ignored.      |
+| `tools.exec.backgroundMs`             | 10000   | Same as `OPENCLAW_BASH_YIELD_MS`. Not a model argument.                         |
+| `tools.exec.timeoutSec`               | 1800    | Legacy key. Process lifetime follows `tools.longTask.maxWaitMs`.                |
 | `tools.exec.cleanupMs`                | 1800000 | Same as `OPENCLAW_BASH_JOB_TTL_MS`.                                             |
 | `tools.exec.notifyOnExit`             | true    | Enqueue a system event + request heartbeat when a backgrounded exec exits.      |
 | `tools.exec.notifyOnExitEmptySuccess` | false   | Also enqueue completion events for successful backgrounded runs with no output. |
@@ -68,7 +68,7 @@ Actions:
 | Action      | Effect                                                                        |
 | ----------- | ----------------------------------------------------------------------------- |
 | `list`      | Running + finished sessions.                                                  |
-| `poll`      | Drain new output for a session (also reports exit status).                    |
+| `poll`      | Rejected. Waiting is owned by `exec`; use `tasks_status` / `tasks_list`.      |
 | `log`       | Read aggregated output and input-recovery hints. Supports `offset` + `limit`. |
 | `write`     | Send stdin (`data`, optional `eof`).                                          |
 | `send-keys` | Send explicit key tokens or bytes to a PTY-backed session.                    |
@@ -80,28 +80,30 @@ Actions:
 
 Notes:
 
-- Only backgrounded sessions are listed/persisted — in memory only, not on disk. Sessions are lost on process restart.
-- Session logs are only saved to chat history if you run `process poll`/`log` and the tool result is recorded.
+- Only runtime-parked sessions are listed/persisted — in memory only, not on disk. Sessions are lost on process restart.
+- Session logs are only saved to chat history if you run `process log` and the tool result is recorded.
 - `process` is scoped per agent; it only sees sessions started by that agent.
-- Use `poll`/`log` for status, logs, or completion confirmation when automatic completion wake is unavailable.
+- Do not process-poll to wait. Use `tasks_status` / `tasks_list` to inspect. Use `log` for output.
 - Use `log` before recovering an interactive CLI, so the current transcript, stdin state, and input-wait hint are visible together.
 - Use `write`/`send-keys`/`submit`/`paste`/`kill` when you need input or intervention.
 - `process list` includes a derived `name` (command verb + target) for quick scans.
 - `process list`, `poll`, and `log` report `waitingForInput` only when the session still has writable stdin and has been idle longer than the input-wait threshold (default 15000 ms, `OPENCLAW_PROCESS_INPUT_WAIT_IDLE_MS`).
 - `process log` uses line-based `offset`/`limit`. When both are omitted, it returns the last 200 lines with a paging hint. When `offset` is set and `limit` isn't, it returns from `offset` to the end (not capped to 200).
-- `poll`'s `timeout` waits up to that many milliseconds before returning; values above 30000 are clamped to 30000.
-- Polling is for on-demand status, not wait-loop scheduling. If the work should happen later, use cron.
+- `process poll` is rejected. Waiting is owned by `exec`.
+- If the work should happen later, use cron.
 
 ## Examples
 
-Run a long task and poll later:
+Call once and wait. Do not poll:
 
 ```json
-{ "tool": "exec", "command": "sleep 5 && echo done", "yieldMs": 1000 }
+{ "tool": "exec", "command": "sleep 5 && echo done" }
 ```
 
+Inspect without waiting:
+
 ```json
-{ "tool": "process", "action": "poll", "sessionId": "<id>" }
+{ "tool": "tasks_status" }
 ```
 
 Inspect an interactive session before sending input:
@@ -110,10 +112,10 @@ Inspect an interactive session before sending input:
 { "tool": "process", "action": "log", "sessionId": "<id>" }
 ```
 
-Start immediately in background:
+Same call for a long build. The runtime parks after `tools.exec.backgroundMs`:
 
 ```json
-{ "tool": "exec", "command": "npm run build", "background": true }
+{ "tool": "exec", "command": "npm run build" }
 ```
 
 Send stdin:

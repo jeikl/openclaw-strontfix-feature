@@ -50,10 +50,10 @@ Large stable content (including **Project Context**) stays above the internal pr
 
 Tooling also carries long-running-work guidance:
 
-- use cron for future follow-up (`check back later`, reminders, recurring work) instead of `exec` sleep loops, `yieldMs` delay tricks, or repeated `process` polling
-- use `exec` / `process` only for commands that start now and continue in the background
+- use cron for future follow-up (`check back later`, reminders, recurring work) instead of `exec` sleep loops or repeated `process` polling
+- call `exec` once for work that starts now. The runtime waits until the command finishes or `tools.longTask.maxWaitMs` expires and returns one folded result. Model `timeout` / `yieldMs` / `background` do not control that wait
+- do not process-poll to wait. Use `process` for logs, stdin, or kill
 - when automatic completion wake is enabled, start the command once and rely on the push-based wake path
-- use `process` for logs, status, input, or intervention on a running command
 - for larger tasks, prefer `sessions_spawn`; sub-agent completion is push-based and auto-announces back to the requester
 - do not poll `subagents list` / `sessions_list` in a loop just to wait for completion
 

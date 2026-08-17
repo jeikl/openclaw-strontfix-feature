@@ -31,9 +31,23 @@ export function classifySessionAttention(params: {
   activity: DiagnosticSessionActivitySnapshot;
   staleMs: number;
   stuckSessionAbortMs?: number;
+  /** Runtime-owned exec wait (tools.longTask). Must not look like a stuck tool. */
+  hasActiveLongTask?: boolean;
 }): SessionAttentionClassification {
   if (params.activity.activeWorkKind) {
     const lastProgressAgeMs = params.activity.lastProgressAgeMs ?? 0;
+
+    // Runtime-owned exec waits are bounded by tools.longTask.maxWaitMs.
+    // Do not classify them as stalled/stuck — recovery would abort the turn.
+    if (params.hasActiveLongTask === true) {
+      return {
+        eventType: "session.long_running",
+        reason: "active_long_task",
+        classification: "long_running",
+        activeWorkKind: params.activity.activeWorkKind,
+        recoveryEligible: false,
+      };
+    }
 
     // Idle session with queued work and stale orphaned activity (no active
     // embedded owner) should be classified as recoverable stuck state, not as
@@ -50,6 +64,19 @@ export function classifySessionAttention(params: {
         reason: "queued_work_without_active_run",
         classification: "stale_session_state",
         recoveryEligible: true,
+      };
+    }
+    // Foreground exec (pre-park) also emits no progress ticks.
+    if (
+      params.activity.activeWorkKind === "tool_call" &&
+      isExecToolName(params.activity.activeToolName)
+    ) {
+      return {
+        eventType: "session.long_running",
+        reason: "active_long_task",
+        classification: "long_running",
+        activeWorkKind: params.activity.activeWorkKind,
+        recoveryEligible: false,
       };
     }
     if (
@@ -127,6 +154,10 @@ export function classifySessionAttention(params: {
     classification: "stale_session_state",
     recoveryEligible: true,
   };
+}
+
+function isExecToolName(toolName: string | undefined): boolean {
+  return toolName?.trim().toLowerCase() === "exec";
 }
 
 export function isTerminalDiagnosticProgressReason(reason: string | undefined): boolean {

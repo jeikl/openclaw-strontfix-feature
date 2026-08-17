@@ -279,7 +279,9 @@ OpenClaw classifies sessions by the work it can still observe:
   `diagnostics.stuckSessionAbortMs` with no progress so queued turns behind
   the lane can resume. When unset, the abort threshold defaults to the safer
   extended window of at least 5 minutes and 3x
-  `diagnostics.stuckSessionWarnMs`.
+  `diagnostics.stuckSessionWarnMs`. An in-flight long `exec` under
+  `tools.longTask` stays `session.long_running` / `active_long_task` and is
+  not abort-drained.
 - `session.stuck`: stale session bookkeeping with no active work, or an idle
   queued session with stale ownerless model/tool activity. This releases the
   affected session lane immediately after recovery gates pass.

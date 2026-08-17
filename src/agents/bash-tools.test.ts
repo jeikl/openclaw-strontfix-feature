@@ -297,7 +297,7 @@ const createNotifyOnExitExecTool = (overrides: Partial<ExecToolConfig> = {}) =>
     ...overrides,
   });
 const createScopedToolSet = (scopeKey: string) => ({
-  exec: createTestExecTool({ backgroundMs: 10, scopeKey }),
+  exec: createTestExecTool({ backgroundMs: 0, scopeKey }),
   process: createProcessTool({ scopeKey }),
 });
 const execTool = createTestExecTool();
@@ -635,7 +635,11 @@ describe("exec tool backgrounding", () => {
   );
 
   it("supports explicit background and derives session name from the command", async () => {
-    const result = await executeExecCommand(execTool, COMMAND_ECHO_HELLO, { background: true });
+    const result = await executeExecCommand(
+      createTestExecTool({ backgroundMs: 0 }),
+      COMMAND_ECHO_HELLO,
+      { background: true },
+    );
     expect(readProcessStatus(result.details)).toBe(PROCESS_STATUS_COMPLETED);
     expect(readTextContent(result.content) ?? "").toContain("hello");
     expect((result.details as { folded?: boolean }).folded).toBe(true);

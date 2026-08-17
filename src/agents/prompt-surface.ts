@@ -20,7 +20,7 @@ export function buildOpenClawToolFallbackText(params: {
       "- find: find files by glob pattern",
       "- ls: list directory contents",
       "- apply_patch: apply multi-file patches",
-      `- ${params.execToolName}: run shell commands (supports background via yieldMs/background)`,
+      `- ${params.execToolName}: run shell commands (runtime waits; timeout/yieldMs are ignored)`,
       `- ${params.processToolName}: manage background exec sessions`,
       "- browser: control OpenClaw's dedicated browser",
       "- canvas: present/eval/snapshot the Canvas",

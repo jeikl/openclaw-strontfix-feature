@@ -9,6 +9,7 @@ import {
   resolveActiveEmbeddedRunHandleSessionId,
   resolveActiveEmbeddedRunHandleSessionIdBySessionFile,
 } from "../agents/embedded-agent-runner/runs.js";
+import { hasActiveLongTaskForSession } from "../agents/long-task-runtime.js";
 import {
   getCommandLaneActiveTaskIds,
   getCommandLaneSnapshot,
@@ -129,6 +130,22 @@ export async function recoverStuckDiagnosticSession(
         sessionId: params.sessionId,
         sessionKey: params.sessionKey,
       };
+    }
+    // Long-task park is event-wait bounded by tools.longTask.maxWaitMs.
+    // Stuck recovery must not abort it (that showed up as "Long task cancelled").
+    if (hasActiveLongTaskForSession(params.sessionKey)) {
+      const outcome: StuckSessionRecoveryOutcome = {
+        status: "skipped",
+        action: "observe_only",
+        reason: "active_long_task",
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+      };
+      diag.warn(
+        `stuck session recovery skipped: ${formatRecoveryContext(params)} reason=active_long_task`,
+      );
+      diag.warn(`stuck session recovery outcome: ${formatRecoveryOutcome(outcome)}`);
+      return outcome;
     }
     const fallbackActiveSessionId =
       params.sessionId && isEmbeddedAgentRunHandleActive(params.sessionId)

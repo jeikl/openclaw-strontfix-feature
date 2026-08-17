@@ -189,6 +189,7 @@ import {
   resolveLocalModelLeanPreserveToolNames,
   shouldCatalogToolForLocalModelLean,
 } from "../../local-model-lean.js";
+import { hasActiveLongTaskForSession } from "../../long-task-runtime.js";
 import { resolveModelAuthMode } from "../../model-auth.js";
 import { resolveDefaultModelForAgent } from "../../model-selection.js";
 import { supportsModelTools } from "../../model-tool-support.js";
@@ -3587,23 +3588,28 @@ export async function runEmbeddedAttempt(
         } else {
           runAbortController.abort(reason);
         }
-        // Tool abort skips already-backgrounded execs; Stop/timeout must still
-        // free those leftover bash processes so they do not keep burning resources.
-        try {
-          killRunningExecSessionsForScopes({
-            scopeKeys: [
-              resolveProcessToolScopeKey({
-                sessionKey: sandboxSessionKey,
-                sessionId: params.sessionId,
-                agentId: sessionAgentId,
-              }),
-              params.sessionKey,
-              sandboxSessionKey,
-              params.sessionId,
-            ],
-          });
-        } catch {
-          // Best-effort cleanup; abort must continue even if kill fails.
+        // User /stop /clear /new cancel long tasks explicitly. System abort
+        // (idle watchdog, run timeout) must not kill a maxWaitMs-owned exec.
+        if (
+          !hasActiveLongTaskForSession(params.sessionKey) &&
+          !hasActiveLongTaskForSession(sandboxSessionKey)
+        ) {
+          try {
+            killRunningExecSessionsForScopes({
+              scopeKeys: [
+                resolveProcessToolScopeKey({
+                  sessionKey: sandboxSessionKey,
+                  sessionId: params.sessionId,
+                  agentId: sessionAgentId,
+                }),
+                params.sessionKey,
+                sandboxSessionKey,
+                params.sessionId,
+              ],
+            });
+          } catch {
+            // Best-effort cleanup; abort must continue even if kill fails.
+          }
         }
         abortCompaction();
         void abortActiveSession();
@@ -3625,6 +3631,12 @@ export async function runEmbeddedAttempt(
       };
       abortRunForExternalSignal = abortRun;
       const idleTimeoutTrigger: ((error: Error) => void) | undefined = (error) => {
+        if (
+          hasActiveLongTaskForSession(params.sessionKey) ||
+          hasActiveLongTaskForSession(sandboxSessionKey)
+        ) {
+          return;
+        }
         idleTimedOut = true;
         abortRun(true, error);
       };

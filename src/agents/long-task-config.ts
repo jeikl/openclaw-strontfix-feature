@@ -81,6 +81,11 @@ export function resolveLongTaskConfig(
   };
 }
 
+/** Process lifetime for exec, in seconds. Owned by tools.longTask.maxWaitMs. */
+export function resolveLongTaskProcessTimeoutSec(maxWaitMs: number): number {
+  return Math.max(1, Math.ceil(maxWaitMs / 1000));
+}
+
 export function resolveLongTaskRetentionMsForStatus(
   status: "succeeded" | "failed" | "timed_out" | "cancelled" | "lost",
   retention: ResolvedLongTaskRetention,

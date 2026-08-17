@@ -136,7 +136,7 @@ describe("exec foreground failures", () => {
     tempDirs.cleanup();
   });
 
-  it("keeps the background fallback warning when gateway exec actually runs inline", async () => {
+  it("ignores model background when gateway exec runs inline", async () => {
     mockSuccessfulSpawn();
     const tool = createExecTool({
       host: "gateway",
@@ -151,7 +151,7 @@ describe("exec foreground failures", () => {
     });
 
     expect(result.details.status).toBe("completed");
-    expect(requireTextContent(result)).toContain(
+    expect(requireTextContent(result)).not.toContain(
       "Warning: background execution is disabled; running synchronously.",
     );
   });
@@ -160,9 +160,9 @@ describe("exec foreground failures", () => {
     const tool = createExecTool({
       security: "full",
       ask: "off",
-      timeoutSec: 1,
       backgroundMs: 10,
       allowBackground: false,
+      config: { tools: { longTask: { maxWaitMs: 1_000 } } },
     });
     supervisorMock.spawn.mockImplementationOnce(async (input: SpawnInput) => ({
       runId: input.runId ?? "call-timeout",
@@ -195,7 +195,7 @@ describe("exec foreground failures", () => {
     expect(supervisorMock.spawn.mock.calls[0]?.[0]?.timeoutMs).toBe(1_000);
     const text = requireTextContent(result);
     expect(text).toMatch(/timed out/i);
-    expect(text).toMatch(/re-run with a higher timeout/i);
+    expect(text).toMatch(/tools\.longTask\.maxWaitMs/i);
     const details = requireFailedDetails(result.details);
     expect(details.exitCode).toBeNull();
     expect(details.exitSignal).toBe("SIGKILL");

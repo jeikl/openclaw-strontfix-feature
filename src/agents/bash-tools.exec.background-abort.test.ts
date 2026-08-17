@@ -1,9 +1,10 @@
 /**
  * Exec background abort tests.
- * Long-task park owns waiting: abort cancels the waiter and kills the process.
- * Process timeout still applies after yield.
+ * Wait and process lifetime are owned by tools.longTask.maxWaitMs.
+ * Model timeout/yieldMs and tool-call abort must not kill a parked exec.
  */
 import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
+import { resetLongTaskRuntimeForTests } from "./long-task-runtime.js";
 
 const supervisorMockState = vi.hoisted(() => ({
   cancelReasons: [] as Array<"manual-cancel" | "overall-timeout">,
@@ -116,9 +117,10 @@ beforeEach(() => {
 
 afterEach(() => {
   resetProcessRegistryForTests();
+  resetLongTaskRuntimeForTests();
 });
 
-async function expectBackgroundSessionAbortCancels(params: {
+async function expectBackgroundSessionIgnoresToolAbort(params: {
   tool: ReturnType<typeof createExecTool>;
   executeParams: ExecToolExecuteParams;
 }) {
@@ -136,7 +138,8 @@ async function expectBackgroundSessionAbortCancels(params: {
       setTimeout(resolve, ABORT_SETTLE_MS);
     });
   }
-  await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+  expect(supervisorMockState.cancelReasons).toEqual([]);
+  pending.catch(() => {});
 }
 
 async function expectBackgroundSessionTimesOut(params: {
@@ -171,24 +174,36 @@ async function expectBackgroundSessionTimesOut(params: {
   expect(result.details.status === "failed" || result.details.timedOut === true).toBe(true);
 }
 
-test("background exec is cancelled when tool signal aborts", async () => {
-  const tool = createTestExecTool({ allowBackground: true, backgroundMs: 0 });
-  await expectBackgroundSessionAbortCancels({
+test("parked exec is not cancelled when tool signal aborts", async () => {
+  const tool = createTestExecTool({
+    allowBackground: true,
+    backgroundMs: 0,
+    config: { tools: { longTask: { maxWaitMs: 1_000 } } },
+  });
+  await expectBackgroundSessionIgnoresToolAbort({
     tool,
     executeParams: { command: BACKGROUND_HOLD_CMD, background: true },
   });
 });
 
-test("pty background exec is cancelled when tool signal aborts", async () => {
-  const tool = createTestExecTool({ allowBackground: true, backgroundMs: 0 });
-  await expectBackgroundSessionAbortCancels({
+test("pty parked exec is not cancelled when tool signal aborts", async () => {
+  const tool = createTestExecTool({
+    allowBackground: true,
+    backgroundMs: 0,
+    config: { tools: { longTask: { maxWaitMs: 1_000 } } },
+  });
+  await expectBackgroundSessionIgnoresToolAbort({
     tool,
     executeParams: { command: BACKGROUND_HOLD_CMD, background: true, pty: true },
   });
 });
 
-test("background exec still times out after tool signal abort", async () => {
-  const tool = createTestExecTool({ allowBackground: true, backgroundMs: 0 });
+test("model timeout is ignored; process lifetime follows maxWaitMs", async () => {
+  const tool = createTestExecTool({
+    allowBackground: true,
+    backgroundMs: 0,
+    config: { tools: { longTask: { maxWaitMs: 2_000 } } },
+  });
   await expectBackgroundSessionTimesOut({
     tool,
     executeParams: {
@@ -196,29 +211,15 @@ test("background exec still times out after tool signal abort", async () => {
       background: true,
       timeout: BACKGROUND_TIMEOUT_SEC,
     },
-    abortAfterStart: true,
-    expectedTimeoutSec: BACKGROUND_TIMEOUT_SEC,
+    expectedTimeoutSec: 2,
   });
 });
 
-test("background exec without explicit timeout applies default timeout", async () => {
+test("model timeout zero does not disable the configured long-task timeout", async () => {
   const tool = createTestExecTool({
     allowBackground: true,
     backgroundMs: 0,
-    timeoutSec: BACKGROUND_TIMEOUT_SEC,
-  });
-  await expectBackgroundSessionTimesOut({
-    tool,
-    executeParams: { command: BACKGROUND_HOLD_CMD, background: true },
-    expectedTimeoutSec: BACKGROUND_TIMEOUT_SEC,
-  });
-});
-
-test("background exec with timeout zero bypasses default timeout", async () => {
-  const tool = createTestExecTool({
-    allowBackground: true,
-    backgroundMs: 0,
-    timeoutSec: BACKGROUND_TIMEOUT_SEC,
+    config: { tools: { longTask: { maxWaitMs: 3_000 } } },
   });
   const abortController = new AbortController();
   const pending = tool.execute(
@@ -236,13 +237,17 @@ test("background exec with timeout zero bypasses default timeout", async () => {
       interval: POLL_INTERVAL_MS,
     })
     .toBe(true);
-  expect(supervisorMockState.spawnInputs.at(-1)?.timeoutMs).toBeUndefined();
+  expect(supervisorMockState.spawnInputs.at(-1)?.timeoutMs).toBe(3_000);
   abortController.abort();
-  await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+  pending.catch(() => {});
 });
 
-test("yielded background exec still times out", async () => {
-  const tool = createTestExecTool({ allowBackground: true, backgroundMs: 10 });
+test("model yieldMs is ignored; process lifetime follows maxWaitMs", async () => {
+  const tool = createTestExecTool({
+    allowBackground: true,
+    backgroundMs: 10,
+    config: { tools: { longTask: { maxWaitMs: 4_000 } } },
+  });
   await expectBackgroundSessionTimesOut({
     tool,
     executeParams: {
@@ -250,22 +255,6 @@ test("yielded background exec still times out", async () => {
       yieldMs: 5,
       timeout: YIELDED_BACKGROUND_TIMEOUT_SEC,
     },
-    expectedTimeoutSec: YIELDED_BACKGROUND_TIMEOUT_SEC,
-  });
-});
-
-test("yieldMs exec without explicit timeout applies default timeout", async () => {
-  const tool = createTestExecTool({
-    allowBackground: true,
-    backgroundMs: 10,
-    timeoutSec: YIELDED_BACKGROUND_TIMEOUT_SEC,
-  });
-  await expectBackgroundSessionTimesOut({
-    tool,
-    executeParams: {
-      command: BACKGROUND_HOLD_CMD,
-      yieldMs: 5,
-    },
-    expectedTimeoutSec: YIELDED_BACKGROUND_TIMEOUT_SEC,
+    expectedTimeoutSec: 4,
   });
 });

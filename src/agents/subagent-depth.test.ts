@@ -155,4 +155,35 @@ describe("resolveAgentTimeoutMs", () => {
     expect(resolveAgentTimeoutMs({ overrideSeconds: 9_999_999 })).toBe(MAX_TIMER_TIMEOUT_MS);
     expect(resolveAgentTimeoutMs({ overrideMs: 9_999_999_999 })).toBe(MAX_TIMER_TIMEOUT_MS);
   });
+
+  it("raises a short timeoutSeconds to tools.longTask.maxWaitMs", () => {
+    expect(
+      resolveAgentTimeoutMs({
+        cfg: {
+          agents: { defaults: { timeoutSeconds: 180 } },
+          tools: { longTask: { maxWaitMs: 1_800_000 } },
+        },
+      }),
+    ).toBe(1_800_000);
+  });
+
+  it("does not shorten a longer agent timeout to maxWaitMs", () => {
+    expect(
+      resolveAgentTimeoutMs({
+        cfg: {
+          agents: { defaults: { timeoutSeconds: 48 * 60 * 60 } },
+          tools: { longTask: { maxWaitMs: 1_800_000 } },
+        },
+      }),
+    ).toBe(48 * 60 * 60 * 1000);
+  });
+
+  it("raises a short per-run override to maxWaitMs", () => {
+    expect(
+      resolveAgentTimeoutMs({
+        cfg: { tools: { longTask: { maxWaitMs: 1_800_000 } } },
+        overrideSeconds: 180,
+      }),
+    ).toBe(1_800_000);
+  });
 });

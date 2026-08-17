@@ -134,9 +134,10 @@ cannot leave a still-queued prompt running.
 - Codex app-server runs that accept a turn and then stop emitting progress are interrupted by the Codex adapter so the active session lane can release instead of waiting for the outer run timeout.
 - When diagnostics are enabled, sessions that remain in `processing` past `diagnostics.stuckSessionWarnMs` with no observed reply, tool, status, block, or ACP progress are classified by current activity:
   - Active work with recent progress logs as `session.long_running`. Owned silent model calls also stay `session.long_running` until `diagnostics.stuckSessionAbortMs` so slow or non-streaming providers are not reported as stalled too early.
+  - An in-flight long `exec` (runtime wait under `tools.longTask`) stays `session.long_running` / `active_long_task`. Stuck-session recovery does not abort that wait or kill the process.
   - Active work with no recent progress logs as `session.stalled`; owned model calls, blocked tool calls, and stalled embedded runs switch to `session.stalled` at or after the abort threshold. Ownerless stale model/tool activity is not hidden as long-running.
   - `session.stuck` is reserved for recoverable stale session bookkeeping, including idle queued sessions with stale ownerless model/tool activity.
-  - `session.stuck` always triggers recovery that can release the affected session lane. A `session.stalled` classification past `diagnostics.stuckSessionAbortMs` (blocked tool call, stalled model call, or stalled embedded run) can also trigger active-abort recovery, so both classifications can unstick a queue, not only `session.stuck`.
+  - `session.stuck` always triggers recovery that can release the affected session lane. A `session.stalled` classification past `diagnostics.stuckSessionAbortMs` (blocked tool call, stalled model call, or stalled embedded run) can also trigger active-abort recovery, so both classifications can unstick a queue, not only `session.stuck`. Long-exec waits are exempt from that abort-drain.
   - Repeated `session.stuck` and `session.long_running` warning log lines back off exponentially while the session remains unchanged; recovery attempts still run on every heartbeat tick regardless of that backoff.
 
 ## Related

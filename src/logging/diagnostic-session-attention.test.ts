@@ -121,6 +121,41 @@ describe("classifySessionAttention", () => {
       },
     },
     {
+      name: "parked long-task exec is long_running, not blocked",
+      queueDepth: 1,
+      hasActiveLongTask: true,
+      activity: {
+        activeWorkKind: "tool_call" as const,
+        activeToolName: "exec",
+        activeToolAgeMs: 372_000,
+        lastProgressAgeMs: 372_000,
+      },
+      expected: {
+        eventType: "session.long_running",
+        reason: "active_long_task",
+        classification: "long_running",
+        activeWorkKind: "tool_call",
+        recoveryEligible: false,
+      },
+    },
+    {
+      name: "foreground exec tool wait is long_running, not blocked",
+      queueDepth: 0,
+      activity: {
+        activeWorkKind: "tool_call" as const,
+        activeToolName: "exec",
+        activeToolAgeMs: 372_000,
+        lastProgressAgeMs: 372_000,
+      },
+      expected: {
+        eventType: "session.long_running",
+        reason: "active_long_task",
+        classification: "long_running",
+        activeWorkKind: "tool_call",
+        recoveryEligible: false,
+      },
+    },
+    {
       name: "idle queued stale model activity without active embedded run",
       state: "idle" as const,
       queueDepth: 1,
@@ -172,7 +207,7 @@ describe("classifySessionAttention", () => {
         recoveryEligible: false,
       },
     },
-  ])("$name", ({ activity, expected, queueDepth, state }) => {
+  ])("$name", ({ activity, expected, queueDepth, state, hasActiveLongTask }) => {
     expect(
       classifySessionAttention({
         state,
@@ -180,6 +215,7 @@ describe("classifySessionAttention", () => {
         activity,
         staleMs: 30_000,
         stuckSessionAbortMs: 60_000,
+        hasActiveLongTask,
       }),
     ).toEqual(expected);
   });

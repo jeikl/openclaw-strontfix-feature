@@ -2,6 +2,21 @@
 
 Docs: https://docs.openclaw.ai
 
+## 2026.7.758
+
+### Highlights
+
+- **长任务只认配置等待 (Config-Only Long-Task Wait):** `exec` 等待和进程寿命只跟 `tools.longTask.maxWaitMs`。模型传入的 `timeout` / `yieldMs` / `background` 忽略，避免 1 秒参数把 30 分钟命令杀掉。
+- **系统不得误杀长任务 (No Accidental Long-Task Kill):** 诊断 stuck-session（约 6 分钟 abort）、LLM idle watchdog、工具 abort signal 不再拆等待、不再杀进程。只有 `/stop` `/clear` `/new` 或 `maxWaitMs` 到期才能结束。
+- **整轮超时下限对齐长任务 (Run Timeout Floors to maxWaitMs):** 有限的 `agents.defaults.timeoutSeconds` 至少抬到 `maxWaitMs`，避免 30 分钟 chat-run 先于长任务到期。显式 `0`（无超时）和更长的值不变。
+
+### Fixes & Enhancements
+
+- **Stuck-session 豁免 in-flight exec (Stuck-Session Exempts Long Exec):** 长任务分类为 `session.long_running` / `active_long_task`；`hasActiveLongTaskForSession` 时跳过 abort-drain，不再把正常长命令误标成 “aborted by user”。
+- **Idle / abortRun 不杀长任务 (Idle and abortRun Skip Long Exec):** LLM 空闲看门狗和工具 abort 不传给 supervisor；`abortRun` 遇到活跃长任务不杀进程。
+- **进程寿命 = maxWaitMs (Process Lifetime = maxWaitMs):** 不再用模型 `timeout` 或遗留 `tools.exec.timeoutSec` 当寿命。`backgroundMs: 0` 立刻 park，不再被夹到 10ms。
+- **文档对齐 758 口径 (Docs Match Config-Only Wait):** `exec`、background-process、config-tools、agent-loop、system-prompt、configuration-reference 写明等待只认配置、诊断不杀、整轮超时下限。
+
 ## 2026.7.757
 
 ### Highlights

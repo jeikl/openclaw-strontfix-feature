@@ -782,7 +782,7 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.loopDetection.postCompactionGuard.windowSize":
     "Number of post-compaction attempts during which the guard stays armed (default: 3). Lower values are stricter; higher values give the agent more attempts before abort.",
   "tools.longTask.maxWaitMs":
-    "Max event-driven wait for a long exec before timed_out (default: 1800000, 30 minutes).",
+    "Sole wait and process-lifetime cap for exec (default: 1800000, 30 minutes). Model timeout/yieldMs arguments are ignored. Only /stop /clear /new or this deadline end the wait.",
   "tools.longTask.blockEndTurn":
     "When true (default), refuse to end the agent turn while a long task is still running.",
   "tools.longTask.retention.succeededDays":

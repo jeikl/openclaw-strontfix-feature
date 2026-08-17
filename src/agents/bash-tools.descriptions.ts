@@ -22,7 +22,7 @@ function deriveExecShortName(fullPath: string): string {
 export function describeExecTool(params?: { agentId?: string; hasCronTool?: boolean }): string {
   const base = [
     "Execute shell commands. The runtime waits internally until the command finishes and returns one folded result. Do not process-poll to wait.",
-    "Use yieldMs/background only to hand the command to that runtime wait. Use process for logs, stdin, or kill — not as a wait loop.",
+    "Do not set timeout or yieldMs to control waiting — wait and process lifetime come from gateway config (tools.longTask.maxWaitMs). Use process for logs, stdin, or kill — not as a wait loop.",
     params?.hasCronTool
       ? "Do not use exec sleep or delay loops for reminders or deferred follow-ups; use cron instead."
       : undefined,

@@ -21,13 +21,18 @@ export const execSchema = Type.Object({
   env: Type.Optional(Type.Record(Type.String(), Type.String())),
   yieldMs: Type.Optional(
     Type.Number({
-      description: "Milliseconds to wait before backgrounding (default 10000)",
+      description:
+        "Ignored. Wait and park are owned by tools.longTask / tools.exec.backgroundMs, not this argument.",
     }),
   ),
-  background: Type.Optional(Type.Boolean({ description: "Run in background immediately" })),
+  background: Type.Optional(
+    Type.Boolean({
+      description: "Ignored. Runtime park is owned by tools.exec.backgroundMs, not this argument.",
+    }),
+  ),
   timeout: Type.Optional(
     Type.Number({
-      description: "Timeout in seconds (optional, kills process on expiry)",
+      description: "Ignored. Process lifetime is tools.longTask.maxWaitMs, not this argument.",
     }),
   ),
   pty: Type.Optional(

@@ -1198,6 +1198,24 @@ export function markStaleExecTaskLost(
   }
 }
 
+export function registerLongTaskWaiterForTests(params: {
+  processSessionId: string;
+  sessionKey: string;
+}): void {
+  const now = Date.now();
+  registerWaiter({
+    processSessionId: params.processSessionId,
+    sessionKey: params.sessionKey,
+    command: "test-long-task",
+    phase: "long_running",
+    startedAt: now,
+    deadlineAt: now + 1_800_000,
+    maxWaitMs: 1_800_000,
+    controller: new AbortController(),
+    finished: createFinishedSignal(),
+  });
+}
+
 export function resetLongTaskRuntimeForTests(): void {
   for (const waiter of waitersByProcessSession.values()) {
     if (!waiter.controller.signal.aborted) {

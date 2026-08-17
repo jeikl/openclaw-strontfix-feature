@@ -76,6 +76,10 @@ vi.mock("./diagnostic-run-activity.js", () => ({
 }));
 
 import {
+  registerLongTaskWaiterForTests,
+  resetLongTaskRuntimeForTests,
+} from "../agents/long-task-runtime.js";
+import {
   testing,
   recoverStuckDiagnosticSession,
 } from "./diagnostic-stuck-session-recovery.runtime.js";
@@ -120,6 +124,7 @@ function warnLogMessages(): string[] {
 describe("stuck session recovery", () => {
   beforeEach(() => {
     resetMocks();
+    resetLongTaskRuntimeForTests();
   });
 
   it("does not abort an active embedded run by default", async () => {
@@ -233,6 +238,36 @@ describe("stuck session recovery", () => {
     expect(mocks.resetCommandLane).toHaveBeenCalledWith(
       "session:agent:main:telegram:group:-1003821464158:topic:4836",
     );
+  });
+
+  it("does not abort an active long-task wait even when allowActiveAbort is set", async () => {
+    mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue("session-long");
+    registerLongTaskWaiterForTests({
+      processSessionId: "calm-bison",
+      sessionKey: "agent:laibao:dingtalk-connector:direct:17273140396774548",
+    });
+
+    const outcome = await recoverStuckDiagnosticSession({
+      sessionId: "session-long",
+      sessionKey: "agent:laibao:dingtalk-connector:direct:17273140396774548",
+      ageMs: 372_000,
+      queueDepth: 1,
+      allowActiveAbort: true,
+    });
+
+    expect(outcome).toMatchObject({
+      status: "skipped",
+      action: "observe_only",
+      reason: "active_long_task",
+      sessionId: "session-long",
+      sessionKey: "agent:laibao:dingtalk-connector:direct:17273140396774548",
+    });
+    expect(mocks.abortEmbeddedAgentRun).not.toHaveBeenCalled();
+    expect(mocks.resetCommandLane).not.toHaveBeenCalled();
+    expect(warnLogMessages()).toEqual([
+      "stuck session recovery skipped: sessionId=session-long sessionKey=agent:laibao:dingtalk-connector:direct:17273140396774548 age=372s queueDepth=1 reason=active_long_task",
+      "stuck session recovery outcome: status=skipped action=observe_only sessionId=session-long sessionKey=agent:laibao:dingtalk-connector:direct:17273140396774548 reason=active_long_task",
+    ]);
   });
 
   it("keeps the lane when a fresh queued turn started during the abort despite stale queue depth", async () => {

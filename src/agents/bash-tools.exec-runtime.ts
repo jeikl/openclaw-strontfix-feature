@@ -470,8 +470,8 @@ export function formatExecFailureReason(params: {
       return "Command not executable (permission denied)";
     case "overall-timeout":
       return typeof params.timeoutSec === "number" && params.timeoutSec > 0
-        ? `Command timed out after ${params.timeoutSec} seconds. If this command is expected to take longer, re-run with a higher timeout (e.g., exec timeout=300). If it should keep running, start it with exec background=true or yieldMs so OpenClaw can register a pollable process session. Do not rely on shell backgrounding with a trailing &.`
-        : "Command timed out. If this command is expected to take longer, re-run with a higher timeout (e.g., exec timeout=300). If it should keep running, start it with exec background=true or yieldMs so OpenClaw can register a pollable process session. Do not rely on shell backgrounding with a trailing &.";
+        ? `Command timed out after ${params.timeoutSec} seconds (tools.longTask.maxWaitMs). Raise tools.longTask.maxWaitMs if the command is expected to run longer. Do not set exec timeout/yieldMs — those arguments are ignored.`
+        : "Command timed out (tools.longTask.maxWaitMs). Raise tools.longTask.maxWaitMs if the command is expected to run longer. Do not set exec timeout/yieldMs — those arguments are ignored.";
     case "no-output-timeout":
       return "Command timed out waiting for output";
     case "signal":

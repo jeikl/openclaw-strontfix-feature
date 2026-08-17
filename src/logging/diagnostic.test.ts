@@ -3,6 +3,10 @@ import fs from "node:fs";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  registerLongTaskWaiterForTests,
+  resetLongTaskRuntimeForTests,
+} from "../agents/long-task-runtime.js";
+import {
   emitDiagnosticEvent,
   onDiagnosticEvent,
   resetDiagnosticEventsForTest,
@@ -317,6 +321,7 @@ describe("stuck session diagnostics threshold", () => {
   afterEach(() => {
     resetDiagnosticEventsForTest();
     resetDiagnosticStateForTest();
+    resetLongTaskRuntimeForTests();
     vi.restoreAllMocks();
     vi.useRealTimers();
   });
@@ -773,6 +778,87 @@ describe("stuck session diagnostics threshold", () => {
       { sessionId: "s1", sessionKey: "main", queueDepth: 0, allowActiveAbort: true },
       ["ageMs", "stateGeneration"],
     );
+  });
+
+  it("does not abort a parked long-task exec through stuck-session recovery", async () => {
+    const events: DiagnosticEventPayload[] = [];
+    const recoverStuckSession = vi.fn();
+    const stuckSessionWarnMs = 30_000;
+    const stuckSessionAbortMs = 60_000;
+    const unsubscribe = onDiagnosticEvent((event) => {
+      events.push(event);
+    });
+    try {
+      startDiagnosticHeartbeat(
+        {
+          diagnostics: {
+            enabled: true,
+            stuckSessionWarnMs,
+            stuckSessionAbortMs,
+          },
+        },
+        { recoverStuckSession },
+      );
+      logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+      markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
+      markDiagnosticToolStartedForTest({
+        sessionId: "s1",
+        sessionKey: "main",
+        runId: "run-1",
+        toolName: "exec",
+        toolCallId: "cmd-exec",
+      });
+      registerLongTaskWaiterForTests({
+        processSessionId: "calm-bison",
+        sessionKey: "main",
+      });
+
+      vi.advanceTimersByTime(stuckSessionAbortMs);
+    } finally {
+      unsubscribe();
+    }
+
+    expect(recoverStuckSession).not.toHaveBeenCalled();
+    expect(events.filter((event) => event.type === "session.stalled")).toEqual([]);
+    expectRecordFields(
+      requireRecord(
+        events.findLast((event) => event.type === "session.long_running"),
+        "long-running event",
+      ),
+      {
+        classification: "long_running",
+        reason: "active_long_task",
+        activeWorkKind: "tool_call",
+        activeToolName: "exec",
+      },
+    );
+  });
+
+  it("does not abort a foreground exec wait through stuck-session recovery", async () => {
+    const recoverStuckSession = vi.fn();
+    startDiagnosticHeartbeat(
+      {
+        diagnostics: {
+          enabled: true,
+          stuckSessionWarnMs: 30_000,
+          stuckSessionAbortMs: 60_000,
+        },
+      },
+      { recoverStuckSession },
+    );
+    logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+    markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
+    markDiagnosticToolStartedForTest({
+      sessionId: "s1",
+      sessionKey: "main",
+      runId: "run-1",
+      toolName: "exec",
+      toolCallId: "cmd-exec",
+    });
+
+    vi.advanceTimersByTime(60_000);
+
+    expect(recoverStuckSession).not.toHaveBeenCalled();
   });
 
   it("recovers stale model calls through the active embedded-run abort path", async () => {

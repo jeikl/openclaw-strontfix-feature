@@ -521,9 +521,9 @@ describe("formatExecFailureReason", () => {
       timeoutSec: 45,
     });
 
-    expect(reason).toContain("background=true");
-    expect(reason).toContain("yieldMs");
-    expect(reason).toContain("Do not rely on shell backgrounding");
+    expect(reason).toContain("tools.longTask.maxWaitMs");
+    expect(reason).toContain("timeout/yieldMs");
+    expect(reason).toContain("those arguments are ignored");
   });
 
   it("formats shell failures without timeout-specific guidance", () => {
@@ -609,8 +609,8 @@ describe("buildExecExitOutcome", () => {
     }
     expect(outcome.failureKind).toBe("overall-timeout");
     expect(outcome.timedOut).toBe(true);
-    expect(outcome.reason).toContain("background=true");
-    expect(outcome.reason).toContain("Do not rely on shell backgrounding");
+    expect(outcome.reason).toContain("tools.longTask.maxWaitMs");
+    expect(outcome.reason).toContain("timeout/yieldMs");
   });
 });
 

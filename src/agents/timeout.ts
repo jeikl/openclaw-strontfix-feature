@@ -8,6 +8,7 @@ import {
   MAX_TIMER_TIMEOUT_MS,
 } from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveLongTaskConfig } from "./long-task-config.js";
 
 const DEFAULT_AGENT_TIMEOUT_SECONDS = 48 * 60 * 60;
 export const DEFAULT_AGENT_TIMEOUT_MS = DEFAULT_AGENT_TIMEOUT_SECONDS * 1000;
@@ -21,6 +22,14 @@ function resolveAgentTimeoutSeconds(cfg?: OpenClawConfig): number {
   return Math.max(seconds, 1);
 }
 
+/** Bounded run timeouts cannot be shorter than tools.longTask.maxWaitMs. */
+function applyLongTaskWaitFloor(timeoutMs: number, cfg?: OpenClawConfig): number {
+  if (!Number.isFinite(timeoutMs) || timeoutMs >= MAX_TIMER_TIMEOUT_MS) {
+    return timeoutMs;
+  }
+  return Math.max(timeoutMs, resolveLongTaskConfig(cfg).maxWaitMs);
+}
+
 export function resolveAgentTimeoutMs(opts: {
   cfg?: OpenClawConfig;
   overrideMs?: number | null;
@@ -29,7 +38,10 @@ export function resolveAgentTimeoutMs(opts: {
 }): number {
   const minMs = Math.max(normalizeNumber(opts.minMs) ?? 1, 1);
   const clampTimeoutMs = (valueMs: number) => clampTimerTimeoutMs(valueMs, minMs) ?? minMs;
-  const defaultMs = clampTimeoutMs(resolveAgentTimeoutSeconds(opts.cfg) * 1000);
+  const defaultMs = applyLongTaskWaitFloor(
+    clampTimeoutMs(resolveAgentTimeoutSeconds(opts.cfg) * 1000),
+    opts.cfg,
+  );
   // Use the maximum timer-safe timeout to represent "no timeout" when explicitly set to 0.
   const NO_TIMEOUT_MS = MAX_TIMER_TIMEOUT_MS;
   const overrideMs = normalizeNumber(opts.overrideMs);
@@ -40,7 +52,7 @@ export function resolveAgentTimeoutMs(opts: {
     if (overrideMs < 0) {
       return defaultMs;
     }
-    return clampTimeoutMs(overrideMs);
+    return applyLongTaskWaitFloor(clampTimeoutMs(overrideMs), opts.cfg);
   }
   const overrideSeconds = normalizeNumber(opts.overrideSeconds);
   if (overrideSeconds !== undefined) {
@@ -50,7 +62,7 @@ export function resolveAgentTimeoutMs(opts: {
     if (overrideSeconds < 0) {
       return defaultMs;
     }
-    return clampTimeoutMs(overrideSeconds * 1000);
+    return applyLongTaskWaitFloor(clampTimeoutMs(overrideSeconds * 1000), opts.cfg);
   }
   return defaultMs;
 }

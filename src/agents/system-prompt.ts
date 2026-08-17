@@ -1076,7 +1076,7 @@ export function buildAgentSystemPrompt(params: {
       "TOOLS.md is usage guidance, not availability.",
       ...(renderOpenClawToolWorkflowHints
         ? [
-            `For long waits, avoid rapid poll loops: use ${execToolName} with enough yieldMs or ${processToolName}(action=poll, timeout=<ms>).`,
+            `For long waits, call ${execToolName} once and let the runtime wait. Do not process-poll and do not set timeout/yieldMs.`,
             "Larger work: use `sessions_spawn`; completion is push-based.",
             '`sessions_spawn`: omit `context` unless transcript needed; then set `context:"fork"`.',
           ]

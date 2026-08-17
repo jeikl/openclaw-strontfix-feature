@@ -340,6 +340,10 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
       timeoutSec: 1800,
       cleanupMs: 1800000,
     },
+    longTask: {
+      maxWaitMs: 1800000,
+      blockEndTurn: true,
+    },
     elevated: {
       enabled: true,
       allowFrom: {

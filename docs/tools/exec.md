@@ -8,7 +8,7 @@ title: "Exec tool"
 
 Run shell commands in the workspace. `exec` is a mutating shell surface: commands can create, edit, or delete files wherever the selected host or sandbox filesystem permits. Disabling OpenClaw filesystem tools such as `write`, `edit`, or `apply_patch` does not make `exec` read-only.
 
-Supports foreground and background execution via `process`. If `process` is disallowed, `exec` runs synchronously and ignores `yieldMs`/`background`. Background sessions are scoped per agent; `process` only sees sessions from the same agent.
+The runtime waits internally until the command finishes (or `tools.longTask.maxWaitMs` expires) and returns one folded result. Do not process-poll to wait. If `process` is disallowed, `exec` still runs to completion under the same wait. `process` is for logs, stdin, or kill — not as a wait loop.
 
 ## Parameters
 
@@ -24,16 +24,16 @@ Working directory for the command.
 Key/value environment overrides merged on top of the inherited environment.
 </ParamField>
 
-<ParamField path="yieldMs" type="number" default="10000">
-Auto-background the command after this delay (ms).
+<ParamField path="yieldMs" type="number">
+Ignored. Park timing is `tools.exec.backgroundMs`, not this argument.
 </ParamField>
 
-<ParamField path="background" type="boolean" default="false">
-Background the command immediately instead of waiting for `yieldMs`.
+<ParamField path="background" type="boolean">
+Ignored. Park timing is `tools.exec.backgroundMs`, not this argument.
 </ParamField>
 
-<ParamField path="timeout" type="number" default="tools.exec.timeoutSec">
-Override the configured exec timeout for this call, in seconds. Applies to foreground, background, `yieldMs`, gateway, sandbox, and node `system.run` execution. `timeout: 0` disables the exec process timeout for that call.
+<ParamField path="timeout" type="number">
+Ignored. Process lifetime is `tools.longTask.maxWaitMs`, not this argument.
 </ParamField>
 
 <ParamField path="pty" type="boolean" default="false">
@@ -78,27 +78,30 @@ Notes:
 - `exec` cannot run `openclaw channels login` or `/approve` shell commands: `openclaw channels login` is an interactive channel-auth flow, and `/approve` needs to go through the approval command handler, not a shell. Run channel login in a terminal on the gateway host, or use a channel-specific login agent tool when one exists (for example `whatsapp_login`).
 - Important: sandboxing is **off by default**. If sandboxing is off, implicit `host=auto` resolves to `gateway`. Explicit `host=sandbox` still fails closed instead of silently running on the gateway host. Enable sandboxing or use `host=gateway` with approvals.
 - Script preflight checks (for common Python/Node shell-syntax mistakes) only inspect files inside the effective `workdir` boundary. If a script path resolves outside `workdir`, preflight is skipped for that file. Preflight also skips entirely when `host=gateway` and the effective policy is `security=full` with `ask=off`.
-- For long-running work that starts now, start it once and rely on automatic completion wake when it is enabled and the command emits output or fails. Use `process` for logs, status, input, or intervention; do not emulate scheduling with sleep loops, timeout loops, or repeated polling.
+- For long-running work that starts now, call `exec` once and let the runtime wait. Do not set `timeout`/`yieldMs` to control waiting, and do not process-poll. Use `process` for logs, stdin, or kill.
 - For work that should happen later or on a schedule, use cron instead of `exec` sleep/delay patterns.
 
 ## Config
 
-| Key                                  | Default                                                | Notes                                                                                                                                                   |
-| ------------------------------------ | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `tools.exec.timeoutSec`              | `1800`                                                 | Default per-command exec timeout in seconds. Per-call `timeout` overrides it; per-call `timeout: 0` disables the exec process timeout.                  |
-| `tools.exec.host`                    | `auto`                                                 | Resolves to `sandbox` when a sandbox runtime is active, `gateway` otherwise.                                                                            |
-| `tools.exec.security`                | `deny` for sandbox, `full` for gateway/node when unset |                                                                                                                                                         |
-| `tools.exec.ask`                     | `off`                                                  |                                                                                                                                                         |
-| `tools.exec.mode`                    | unset                                                  | Normalized policy knob. See [Modes](#modes) below. Cannot be combined with `tools.exec.security`/`tools.exec.ask`.                                      |
-| `tools.exec.node`                    | unset                                                  |                                                                                                                                                         |
-| `tools.exec.notifyOnExit`            | `true`                                                 | When true, backgrounded exec sessions enqueue a system event and request a heartbeat on exit.                                                           |
-| `tools.exec.approvalRunningNoticeMs` | `10000`                                                | Emit a single "running" notice when an approval-gated exec runs longer than this (`0` disables).                                                        |
-| `tools.exec.strictInlineEval`        | `false`                                                | See [Inline eval](#inline-eval-strictinlineeval).                                                                                                       |
-| `tools.exec.commandHighlighting`     | `false`                                                | When true, approval prompts can highlight parser-derived command spans in the command text. Set globally or per agent; does not change approval policy. |
-| `tools.exec.pathPrepend`             | unset                                                  | List of directories to prepend to `PATH` for exec runs (gateway + sandbox only).                                                                        |
-| `tools.exec.safeBins`                | unset                                                  | Stdin-only safe binaries that can run without explicit allowlist entries. See [Safe bins](/tools/exec-approvals-advanced#safe-bins-stdin-only).         |
-| `tools.exec.safeBinTrustedDirs`      | `/bin`, `/usr/bin`                                     | Additional explicit directories trusted for `safeBins` path checks. `PATH` entries are never auto-trusted.                                              |
-| `tools.exec.safeBinProfiles`         | unset                                                  | Optional custom argv policy per safe bin (`minPositional`, `maxPositional`, `allowedValueFlags`, `deniedFlags`).                                        |
+| Key                                  | Default                                                | Notes                                                                                                                                                                                                                                                |
+| ------------------------------------ | ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `tools.longTask.maxWaitMs`           | `1800000`                                              | Sole wait and process-lifetime cap for exec (30 minutes). Model `timeout`/`yieldMs`/`background` are ignored. Only `/stop` `/clear` `/new` or this deadline end the wait. Bounded `agents.defaults.timeoutSeconds` is raised to at least this value. |
+| `tools.longTask.blockEndTurn`        | `true`                                                 | Refuse to end the agent turn while a long exec is still running.                                                                                                                                                                                     |
+| `tools.exec.backgroundMs`            | `10000`                                                | How long to watch in the foreground before handing the command to the runtime wait. `0` parks immediately. Not a model argument.                                                                                                                     |
+| `tools.exec.timeoutSec`              | `1800`                                                 | Legacy key. Exec process lifetime now follows `tools.longTask.maxWaitMs`; per-call `timeout` is ignored.                                                                                                                                             |
+| `tools.exec.host`                    | `auto`                                                 | Resolves to `sandbox` when a sandbox runtime is active, `gateway` otherwise.                                                                                                                                                                         |
+| `tools.exec.security`                | `deny` for sandbox, `full` for gateway/node when unset |                                                                                                                                                                                                                                                      |
+| `tools.exec.ask`                     | `off`                                                  |                                                                                                                                                                                                                                                      |
+| `tools.exec.mode`                    | unset                                                  | Normalized policy knob. See [Modes](#modes) below. Cannot be combined with `tools.exec.security`/`tools.exec.ask`.                                                                                                                                   |
+| `tools.exec.node`                    | unset                                                  |                                                                                                                                                                                                                                                      |
+| `tools.exec.notifyOnExit`            | `true`                                                 | When true, backgrounded exec sessions enqueue a system event and request a heartbeat on exit.                                                                                                                                                        |
+| `tools.exec.approvalRunningNoticeMs` | `10000`                                                | Emit a single "running" notice when an approval-gated exec runs longer than this (`0` disables).                                                                                                                                                     |
+| `tools.exec.strictInlineEval`        | `false`                                                | See [Inline eval](#inline-eval-strictinlineeval).                                                                                                                                                                                                    |
+| `tools.exec.commandHighlighting`     | `false`                                                | When true, approval prompts can highlight parser-derived command spans in the command text. Set globally or per agent; does not change approval policy.                                                                                              |
+| `tools.exec.pathPrepend`             | unset                                                  | List of directories to prepend to `PATH` for exec runs (gateway + sandbox only).                                                                                                                                                                     |
+| `tools.exec.safeBins`                | unset                                                  | Stdin-only safe binaries that can run without explicit allowlist entries. See [Safe bins](/tools/exec-approvals-advanced#safe-bins-stdin-only).                                                                                                      |
+| `tools.exec.safeBinTrustedDirs`      | `/bin`, `/usr/bin`                                     | Additional explicit directories trusted for `safeBins` path checks. `PATH` entries are never auto-trusted.                                                                                                                                           |
+| `tools.exec.safeBinProfiles`         | unset                                                  | Optional custom argv policy per safe bin (`minPositional`, `maxPositional`, `allowedValueFlags`, `deniedFlags`).                                                                                                                                     |
 
 No-approval host exec is the default for gateway and node (`security=full`, `ask=off`) — this comes from the host-policy defaults, not from `host=auto`. If you want approvals/allowlist behavior, tighten both `tools.exec.*` and the host approvals file; see [Exec approvals](/tools/exec-approvals#yolo-mode-no-approval). To force gateway or node routing regardless of sandbox state, set `tools.exec.host` or use `/exec host=...`.
 
@@ -201,14 +204,13 @@ Foreground:
 { "tool": "exec", "command": "ls -la" }
 ```
 
-Background + poll:
+Long command — call once and wait. Do not poll:
 
 ```json
-{"tool":"exec","command":"npm run build","yieldMs":1000}
-{"tool":"process","action":"poll","sessionId":"<id>"}
+{ "tool": "exec", "command": "npm run build" }
 ```
 
-Polling is for on-demand status, not waiting loops. If automatic completion wake is enabled, the command can wake the session when it emits output or fails.
+The runtime returns one folded result when the command finishes or `tools.longTask.maxWaitMs` expires. Use `tasks_status` / `tasks_list` to inspect; use `process` only for logs, stdin, or kill.
 
 Send keys (tmux-style):
 

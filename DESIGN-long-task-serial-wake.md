@@ -1,8 +1,8 @@
 # 长任务串行驻留
 
 > 仓库：`openclaw-strontfix-feature`  
-> 日期：2026-08-14  
-> 状态：定稿  
+> 日期：2026-08-17  
+> 状态：定稿（758：等待只认配置，系统不得误杀）  
 > 范围：`exec` 等待、落盘、查询、Gateway 停机与恢复
 
 ---
@@ -13,7 +13,9 @@
 
 - `exec` 阻塞到命令结束，返回 **一条折叠 tool result**（状态、耗时、摘要）。
 - 等待是事件驱动：进程退出通知、session 退出、或 `maxWaitMs` 超时。不占 CPU，不打大模型。
+- 等待和进程寿命 **只认配置** `tools.longTask.maxWaitMs`。模型传入的 `timeout` / `yieldMs` / `background` **忽略**。
 - 当前 turn 不结束。普通用户消息入队。`/stop` `/clear` `/new` 才能拆长任务。
+- 诊断 stuck-session、LLM idle watchdog、工具 abort signal **不得** 杀掉长任务。
 - 任务账本落在 sqlite，用 `tasks_status` / `tasks_list` 查询。
 - 未知配置键警告忽略，不拒启动。
 
@@ -88,30 +90,41 @@ summary: …
 }
 ```
 
-| 键                        | 默认             | 含义                                |
-| ------------------------- | ---------------- | ----------------------------------- |
-| `maxWaitMs`               | `1800000`（30m） | 事件等待上限，到期 `timed_out`      |
-| `blockEndTurn`            | `true`           | 仍有 running 长任务时禁止结束 turn  |
-| `retention.succeededDays` | `7`              | 成功记录保留（天，可小数）          |
-| `retention.failedDays`    | `7`              | failed / timed_out / cancelled 保留 |
-| `retention.lostDays`      | `1`              | lost 保留                           |
-| `retention.outputDays`    | `3`              | 完整输出文件保留                    |
+| 键                        | 默认             | 含义                                         |
+| ------------------------- | ---------------- | -------------------------------------------- |
+| `maxWaitMs`               | `1800000`（30m） | **唯一**等待上限和进程寿命；到期 `timed_out` |
+| `blockEndTurn`            | `true`           | 仍有 running 长任务时禁止结束 turn           |
+| `retention.succeededDays` | `7`              | 成功记录保留（天，可小数）                   |
+| `retention.failedDays`    | `7`              | failed / timed_out / cancelled 保留          |
+| `retention.lostDays`      | `1`              | lost 保留                                    |
+| `retention.outputDays`    | `3`              | 完整输出文件保留                             |
 
-exec 参数：
+实现细节（配置，不是模型参数）：
 
-| 字段         | 默认                              | 含义                             |
-| ------------ | --------------------------------- | -------------------------------- |
-| `yieldMs`    | `tools.exec.backgroundMs` = 10000 | 前台先盯这么久，再交给运行时等待 |
-| `timeout`    | `tools.exec.timeoutSec` = 1800    | 进程最长存活秒数                 |
-| `background` | false                             | `true` 则立刻交给运行时等待      |
+| 键                        | 默认  | 含义                                                                 |
+| ------------------------- | ----- | -------------------------------------------------------------------- |
+| `tools.exec.backgroundMs` | 10000 | 前台先盯这么久再交给运行时等待。`0` 立刻 park。模型 `yieldMs` 不读。 |
+
+模型工具字段 `timeout` / `yieldMs` / `background` **保留在 schema 以免旧调用报错，runtime 忽略**。
+
+整轮 agent/chat run 超时（`agents.defaults.timeoutSeconds`，默认 48h）有下限：有限超时至少为 `maxWaitMs`。显式 `0`（无超时）和比 `maxWaitMs` 更长的值不变。
 
 时间轴：
 
 ```text
-yieldMs / backgroundMs     前台先盯一会儿
-maxWaitMs                  运行时等待上限
-exec.timeout / timeoutSec  进程总寿命
+tools.exec.backgroundMs    前台先盯一会儿（配置，不是模型参数）
+tools.longTask.maxWaitMs   运行时等待上限 + 进程寿命
 ```
+
+谁可以结束等待：
+
+| 来源                                       | 行为                           |
+| ------------------------------------------ | ------------------------------ |
+| 进程正常退出                               | `succeeded` / `failed`         |
+| `maxWaitMs` 到期                           | `timed_out`，杀进程            |
+| `/stop` `/clear` `/new`                    | `cancelled`，杀进程，结束 turn |
+| `gateway stop --force`                     | `cancelled`，杀进程            |
+| 诊断 stuck-session / LLM idle / 工具 abort | **不杀**                       |
 
 ---
 
@@ -164,3 +177,5 @@ Gateway 挂在 IDE 终端里时，Ctrl+C / 重启仍可能把 exec 一起带走�
 6. 改 `maxWaitMs` 立刻生效。
 7. 优雅停机后启动：卡片和 turn 按原计时恢复。
 8. `--force` 停机后启动：不叫醒任何 turn。
+9. 模型传 `timeout=1` / `yieldMs=1` / `background=true`：等待和进程寿命仍跟 `maxWaitMs`，不会 1 秒就停。
+10. 跑超过 6 分钟的 exec：诊断最多报 `long_running`，不会 `Long task cancelled`。
