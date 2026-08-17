@@ -2,6 +2,21 @@
 
 Docs: https://docs.openclaw.ai
 
+## 2026.7.757
+
+### Highlights
+
+- **长任务串行驻留 (Long-Task Serial Wait):** `exec` 改为运行时事件等待（最长 `maxWaitMs`），命令结束/异常/超时后只回一条折叠 tool result；当前 turn 不结束，普通消息入队，`/stop` `/clear` `/new` 才能拆等待。
+- **去掉模型 `process poll` (No More Model Poll):** 等待不再打大模型、不再走内部短轮询切片；查询改用 `tasks_status` / `tasks_list`。
+
+### Fixes & Enhancements
+
+- **事件等待取代短轮询 (Event-Driven Wait):** 进程退出、session 退出或 `maxWaitMs` 到期才唤醒；不占 CPU。配置为 `tools.longTask`（`maxWaitMs`、`blockEndTurn`、按天 retention）。
+- **优雅停机重挂 (Graceful Restart Reattach):** 重启按原 `startedAt` 接着计时，输出写回原 tool 卡片并叫醒该会话；`gateway stop --force` 清空全部 running exec，启动后不叫醒。
+- **死 pid 立刻 `lost` (Dead Pid → Lost):** 启动时 backing pid 已死立刻记 `lost`，elapsed 停（优先输出文件 mtime），写回已有输出并通知该会话。
+- **折叠结果带日志路径 (Folded Result + outputPath):** 完整输出只落盘；历史 pruning 对 `exec` 多留尾（头 1000 / 尾 4000），hard-clear 占位符带完整日志路径。
+- **台账与发送按钮 (Ledger & Stop Button):** 终态台账不带 in-progress `phase`；会话 running 时发送按钮变为停止。
+
 ## 2026.7.756
 
 ### Highlights
