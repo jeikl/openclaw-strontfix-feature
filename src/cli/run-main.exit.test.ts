@@ -660,15 +660,20 @@ describe("runCli exit behavior", () => {
     }
   });
 
-  it("defers a service-mode future-config exit to the migration owner", async () => {
-    readConfigFileSnapshotMock.mockResolvedValue({
+  it("allows a service-mode future-config snapshot through the migration owner", async () => {
+    const futureSnapshot = {
       exists: true,
       hash: "guarded",
       path: "/tmp/openclaw.json",
       raw: "{}",
       valid: true,
-      sourceConfig: { gateway: { mode: "local" } },
-    });
+      sourceConfig: {
+        env: { vars: { OPENCLAW_SERVICE_MARKER: "gateway" } },
+        meta: { lastTouchedVersion: "9999.1.1" },
+        gateway: { mode: "local" },
+      },
+    };
+    readConfigFileSnapshotMock.mockResolvedValue(futureSnapshot);
     await runCli(["node", "openclaw", "gateway"]);
     const hooks = addGatewayRunCommandMock.mock.calls[0]?.[1] as
       | { beforeRun?: (opts: { reset?: boolean }) => Promise<void> }
@@ -687,23 +692,10 @@ describe("runCli exit behavior", () => {
           OPENCLAW_SERVICE_MARKER: undefined,
         },
         async () => {
-          await expect(
-            beforeStateMigrations?.({
-              exists: true,
-              hash: "future",
-              path: "/tmp/openclaw.json",
-              raw: "{}",
-              valid: true,
-              sourceConfig: {
-                env: { vars: { OPENCLAW_SERVICE_MARKER: "gateway" } },
-                meta: { lastTouchedVersion: "9999.1.1" },
-              },
-            }),
-          ).rejects.toMatchObject({ name: "ExitError", code: 78 });
-          expect(errorSpy).toHaveBeenCalledWith(
+          await expect(beforeStateMigrations?.(futureSnapshot)).resolves.toBe(true);
+          expect(errorSpy).not.toHaveBeenCalledWith(
             expect.stringContaining("start the gateway service"),
           );
-          expect(process.env.OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS).toBeUndefined();
           expect(exitSpy).not.toHaveBeenCalled();
         },
       );
@@ -719,42 +711,32 @@ describe("runCli exit behavior", () => {
       flags: [],
       marker: undefined,
       override: undefined,
-      expectedAction: "run automatic gateway startup migrations",
-      expectedExitCode: 1,
     },
     {
       name: "service-mode startup",
       flags: [],
       marker: "gateway",
       override: "1",
-      expectedAction: "start the gateway service",
-      expectedExitCode: 78,
     },
     {
       name: "forced port cleanup",
       flags: ["--force"],
       marker: undefined,
       override: undefined,
-      expectedAction: "force-kill gateway port listeners",
-      expectedExitCode: 1,
     },
     {
       name: "dev reset",
       flags: ["--dev", "--reset"],
       marker: undefined,
       override: undefined,
-      expectedAction: "reset the dev gateway state",
-      expectedExitCode: 1,
     },
     {
       name: "forced dev reset",
       flags: ["--dev", "--reset", "--force"],
       marker: undefined,
       override: undefined,
-      expectedAction: "reset the dev gateway state",
-      expectedExitCode: 1,
     },
-  ])("blocks future-config $name before gateway bootstrap", async (params) => {
+  ])("allows future-config $name before gateway bootstrap", async (params) => {
     readConfigFileSnapshotMock.mockResolvedValue({
       exists: true,
       valid: true,
@@ -777,17 +759,9 @@ describe("runCli exit behavior", () => {
       throw new Error(`exit:${String(code)}`);
     }) as typeof process.exit);
     try {
-      await expect(runCli(["node", "openclaw", "gateway", ...params.flags])).rejects.toThrow(
-        `exit:${params.expectedExitCode}`,
-      );
-      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining(params.expectedAction));
-      expect(ensureCliExecutionBootstrapMock).not.toHaveBeenCalled();
-      expect(readConfigFileSnapshotMock.mock.calls).toEqual([
-        [{ isolateEnv: true, observe: false }],
-      ]);
-      if (params.marker) {
-        expect(process.env.OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS).toBeUndefined();
-      }
+      await runCli(["node", "openclaw", "gateway", ...params.flags]);
+      expect(errorSpy).not.toHaveBeenCalledWith(expect.stringContaining("Refusing to"));
+      expect(exitSpy).not.toHaveBeenCalled();
     } finally {
       exitSpy.mockRestore();
       errorSpy.mockRestore();
@@ -804,7 +778,7 @@ describe("runCli exit behavior", () => {
     }
   });
 
-  it("blocks and revokes the destructive override when selected config declares service mode", async () => {
+  it("allows a newer-written config that declares service mode", async () => {
     readConfigFileSnapshotMock.mockResolvedValue({
       exists: true,
       valid: true,
@@ -824,10 +798,8 @@ describe("runCli exit behavior", () => {
           OPENCLAW_SERVICE_MARKER: undefined,
         },
         async () => {
-          await expect(runCli(["node", "openclaw", "gateway"])).rejects.toThrow("exit:78");
-          expect(process.env.OPENCLAW_SERVICE_MARKER).toBeUndefined();
-          expect(process.env.OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS).toBeUndefined();
-          expect(ensureCliExecutionBootstrapMock).not.toHaveBeenCalled();
+          await runCli(["node", "openclaw", "gateway"]);
+          expect(exitSpy).not.toHaveBeenCalled();
         },
       );
     } finally {
@@ -985,7 +957,7 @@ describe("runCli exit behavior", () => {
     }
   });
 
-  it("blocks a future-config recovery candidate before destructive gateway reset", async () => {
+  it("allows a future-config recovery candidate during destructive gateway reset", async () => {
     const currentSnapshot = {
       exists: true,
       valid: true,
@@ -1012,18 +984,18 @@ describe("runCli exit behavior", () => {
       const hooks = addGatewayRunCommandMock.mock.calls[0]?.[1] as
         | { beforeRun?: (opts: { reset?: boolean }) => Promise<void> }
         | undefined;
-      await expect(hooks?.beforeRun?.({ reset: true })).rejects.toThrow("exit:1");
-      expect(errorSpy).toHaveBeenCalledWith(
+      await hooks?.beforeRun?.({ reset: true });
+      expect(errorSpy).not.toHaveBeenCalledWith(
         expect.stringContaining("Refusing to reset the dev gateway state"),
       );
-      expect(ensureCliExecutionBootstrapMock).not.toHaveBeenCalled();
+      expect(exitSpy).not.toHaveBeenCalled();
     } finally {
       exitSpy.mockRestore();
       errorSpy.mockRestore();
     }
   });
 
-  it("blocks a future current config before pre-bootstrap suspicious recovery", async () => {
+  it("allows a future current config during pre-bootstrap suspicious recovery", async () => {
     const currentSnapshot = {
       exists: true,
       valid: true,
@@ -1050,18 +1022,18 @@ describe("runCli exit behavior", () => {
       const hooks = addGatewayRunCommandMock.mock.calls[0]?.[1] as
         | { beforeRun?: (opts: { force?: boolean }) => Promise<void> }
         | undefined;
-      await expect(hooks?.beforeRun?.({})).rejects.toThrow("exit:1");
-      expect(errorSpy).toHaveBeenCalledWith(
+      await hooks?.beforeRun?.({});
+      expect(errorSpy).not.toHaveBeenCalledWith(
         expect.stringContaining("run automatic gateway startup migrations"),
       );
-      expect(ensureCliExecutionBootstrapMock).not.toHaveBeenCalled();
+      expect(exitSpy).not.toHaveBeenCalled();
     } finally {
       exitSpy.mockRestore();
       errorSpy.mockRestore();
     }
   });
 
-  it("blocks a future service-mode candidate before pre-bootstrap suspicious recovery", async () => {
+  it("allows a future service-mode candidate during pre-bootstrap suspicious recovery", async () => {
     const currentSnapshot = {
       exists: true,
       valid: true,
@@ -1095,11 +1067,13 @@ describe("runCli exit behavior", () => {
           const hooks = addGatewayRunCommandMock.mock.calls[0]?.[1] as
             | { beforeRun?: (opts: { force?: boolean }) => Promise<void> }
             | undefined;
-          await expect(hooks?.beforeRun?.({})).rejects.toThrow("exit:78");
+          await hooks?.beforeRun?.({});
         },
       );
-      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("start the gateway service"));
-      expect(ensureCliExecutionBootstrapMock).not.toHaveBeenCalled();
+      expect(errorSpy).not.toHaveBeenCalledWith(
+        expect.stringContaining("start the gateway service"),
+      );
+      expect(exitSpy).not.toHaveBeenCalled();
     } finally {
       exitSpy.mockRestore();
       errorSpy.mockRestore();
@@ -1149,11 +1123,11 @@ describe("runCli exit behavior", () => {
             throw new Error(`exit:${String(code)}`);
           }) as typeof process.exit);
           try {
-            await expect(runCli(["node", "openclaw", "gateway"])).rejects.toThrow("exit:1");
-            expect(errorSpy).toHaveBeenCalledWith(
+            await runCli(["node", "openclaw", "gateway"]);
+            expect(errorSpy).not.toHaveBeenCalledWith(
               expect.stringContaining("run automatic gateway startup migrations"),
             );
-            expect(ensureCliExecutionBootstrapMock).not.toHaveBeenCalled();
+            expect(exitSpy).not.toHaveBeenCalled();
             expect(readConfigFileSnapshotMock).toHaveBeenCalledTimes(3);
           } finally {
             exitSpy.mockRestore();
@@ -1195,10 +1169,11 @@ describe("runCli exit behavior", () => {
         throw new Error(`exit:${String(code)}`);
       }) as typeof process.exit);
       try {
-        await expect(runCli(["node", "openclaw", "gateway"])).rejects.toThrow("exit:1");
-        expect(errorSpy).toHaveBeenCalledWith(
+        await runCli(["node", "openclaw", "gateway"]);
+        expect(errorSpy).not.toHaveBeenCalledWith(
           expect.stringContaining("run automatic gateway startup migrations"),
         );
+        expect(exitSpy).not.toHaveBeenCalled();
         expect(readConfigFileSnapshotMock).toHaveBeenCalledTimes(2);
       } finally {
         exitSpy.mockRestore();
@@ -1295,13 +1270,12 @@ describe("runCli exit behavior", () => {
             throw new Error(`exit:${String(code)}`);
           }) as typeof process.exit);
           try {
-            await expect(runCli(["node", "openclaw", "gateway"])).rejects.toThrow("exit:1");
-            expect(errorSpy).toHaveBeenCalledWith(
+            await runCli(["node", "openclaw", "gateway"]);
+            expect(errorSpy).not.toHaveBeenCalledWith(
               expect.stringContaining("run automatic gateway startup migrations"),
             );
-            expect(ensureCliExecutionBootstrapMock).not.toHaveBeenCalled();
+            expect(exitSpy).not.toHaveBeenCalled();
             expect(readConfigFileSnapshotMock).toHaveBeenCalledTimes(2);
-            expect(process.env.OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS).toBeUndefined();
           } finally {
             exitSpy.mockRestore();
             errorSpy.mockRestore();
@@ -1360,11 +1334,11 @@ describe("runCli exit behavior", () => {
         const hooks = addGatewayRunCommandMock.mock.calls[0]?.[1] as
           | { beforeRun?: (opts: { force?: boolean }) => Promise<void> }
           | undefined;
-        await expect(hooks?.beforeRun?.({})).rejects.toThrow("exit:1");
-        expect(errorSpy).toHaveBeenCalledWith(
+        await hooks?.beforeRun?.({});
+        expect(errorSpy).not.toHaveBeenCalledWith(
           expect.stringContaining("run automatic gateway startup migrations"),
         );
-        expect(ensureCliExecutionBootstrapMock).not.toHaveBeenCalled();
+        expect(exitSpy).not.toHaveBeenCalled();
         expect(recoveryReads).toBe(2);
       } finally {
         exitSpy.mockRestore();
@@ -1803,11 +1777,11 @@ describe("runCli exit behavior", () => {
             throw new Error(`exit:${String(code)}`);
           }) as typeof process.exit);
           try {
-            await expect(runCli(["node", "openclaw", "gateway"])).rejects.toThrow("exit:1");
-            expect(errorSpy).toHaveBeenCalledWith(
+            await runCli(["node", "openclaw", "gateway"]);
+            expect(errorSpy).not.toHaveBeenCalledWith(
               expect.stringContaining("run automatic gateway startup migrations"),
             );
-            expect(process.env.OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS).toBeUndefined();
+            expect(exitSpy).not.toHaveBeenCalled();
           } finally {
             exitSpy.mockRestore();
             errorSpy.mockRestore();

@@ -931,7 +931,7 @@ describe("gateway run option collisions", () => {
     );
   });
 
-  it("rechecks future config after the final config enters service mode", async () => {
+  it("allows startup after the final config enters service mode with a newer writer", async () => {
     await withEnvAsync(
       {
         OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS: "1",
@@ -952,17 +952,15 @@ describe("gateway run option collisions", () => {
           valid: true,
         };
 
-        await expect(runGatewayCli(["gateway"])).rejects.toThrow("__exit__:78");
+        await runGatewayCli(["gateway"]);
 
-        expect(process.env.OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS).toBeUndefined();
-        expect(process.env.OPENCLAW_SERVICE_MARKER).toBeUndefined();
-        expect(startGatewayServer).not.toHaveBeenCalled();
-        expect(runtimeErrors.join("\n")).toContain("start the gateway service");
+        expect(startGatewayServer).toHaveBeenCalled();
+        expect(runtimeErrors.join("\n")).not.toContain("start the gateway service");
       },
     );
   });
 
-  it("blocks --force port cleanup from an older binary with newer config", async () => {
+  it("allows --force port cleanup from an older binary with newer config", async () => {
     configState.snapshot = {
       exists: true,
       valid: true,
@@ -970,16 +968,14 @@ describe("gateway run option collisions", () => {
       sourceConfig: { meta: { lastTouchedVersion: "9999.1.1" } },
     };
 
-    await expect(
-      runGatewayCli(["gateway", "run", "--allow-unconfigured", "--force"]),
-    ).rejects.toThrow("__exit__:1");
+    await runGatewayCli(["gateway", "run", "--allow-unconfigured", "--force"]);
 
-    expect(forceFreePortAndWait).not.toHaveBeenCalled();
-    expect(startGatewayServer).not.toHaveBeenCalled();
-    expect(runtimeErrors.join("\n")).toContain("Refusing to force-kill gateway port listeners");
+    expect(forceFreePortAndWait).toHaveBeenCalled();
+    expect(startGatewayServer).toHaveBeenCalled();
+    expect(runtimeErrors.join("\n")).not.toContain("Refusing to force-kill gateway port listeners");
   });
 
-  it("blocks service-mode startup from an older binary with newer config", async () => {
+  it("allows service-mode startup from an older binary with newer config", async () => {
     configState.snapshot = {
       exists: true,
       valid: true,
@@ -989,9 +985,7 @@ describe("gateway run option collisions", () => {
     const previousMarker = process.env.OPENCLAW_SERVICE_MARKER;
     process.env.OPENCLAW_SERVICE_MARKER = "gateway";
     try {
-      await expect(runGatewayCli(["gateway", "run", "--allow-unconfigured"])).rejects.toThrow(
-        "__exit__:78",
-      );
+      await runGatewayCli(["gateway", "run", "--allow-unconfigured"]);
     } finally {
       if (previousMarker === undefined) {
         delete process.env.OPENCLAW_SERVICE_MARKER;
@@ -1000,12 +994,11 @@ describe("gateway run option collisions", () => {
       }
     }
 
-    expect(forceFreePortAndWait).not.toHaveBeenCalled();
-    expect(startGatewayServer).not.toHaveBeenCalled();
-    expect(runtimeErrors.join("\n")).toContain("Refusing to start the gateway service");
+    expect(startGatewayServer).toHaveBeenCalled();
+    expect(runtimeErrors.join("\n")).not.toContain("Refusing to start the gateway service");
   });
 
-  it("blocks dev reset from an older binary before deleting state", async () => {
+  it("allows dev reset from an older binary when config was written by a newer one", async () => {
     configState.snapshot = {
       exists: true,
       valid: true,
@@ -1013,14 +1006,12 @@ describe("gateway run option collisions", () => {
       sourceConfig: { meta: { lastTouchedVersion: "9999.1.1" } },
     };
 
-    await expect(prepareGatewayReset()).rejects.toThrow("__exit__:1");
+    await expect(prepareGatewayReset()).resolves.toBe(false);
 
-    expect(ensureDevGatewayConfig).not.toHaveBeenCalled();
-    expect(startGatewayServer).not.toHaveBeenCalled();
-    expect(runtimeErrors.join("\n")).toContain("Refusing to reset the dev gateway state");
+    expect(runtimeErrors.join("\n")).not.toContain("Refusing to reset the dev gateway state");
   });
 
-  it("blocks dev reset when parseable future-version metadata is schema-invalid", async () => {
+  it("allows dev reset when parseable future-version metadata is schema-invalid", async () => {
     configState.snapshot = {
       config: {},
       exists: true,
@@ -1033,11 +1024,9 @@ describe("gateway run option collisions", () => {
       valid: false,
     };
 
-    await expect(prepareGatewayReset()).rejects.toThrow("__exit__:1");
+    await expect(prepareGatewayReset()).resolves.toBe(false);
 
-    expect(ensureDevGatewayConfig).not.toHaveBeenCalled();
-    expect(startGatewayServer).not.toHaveBeenCalled();
-    expect(runtimeErrors.join("\n")).toContain("Refusing to reset the dev gateway state");
+    expect(runtimeErrors.join("\n")).not.toContain("Refusing to reset the dev gateway state");
   });
 
   it("does not retain targets or credentials from the config deleted by dev reset", async () => {
@@ -1157,7 +1146,7 @@ describe("gateway run option collisions", () => {
     });
   });
 
-  it("blocks a future-version late recovery candidate before gateway startup", async () => {
+  it("allows a future-version late recovery candidate before gateway startup", async () => {
     readConfigFileSnapshotWithPluginMetadata.mockImplementationOnce(async (options) => {
       await options?.allowSuspiciousRecovery?.(
         {
@@ -1169,15 +1158,13 @@ describe("gateway run option collisions", () => {
       return { snapshot: configState.snapshot };
     });
 
-    await expect(runGatewayCli(["gateway", "run", "--allow-unconfigured"])).rejects.toThrow(
-      "__exit__:1",
-    );
+    await runGatewayCli(["gateway", "run", "--allow-unconfigured"]);
 
-    expect(startGatewayServer).not.toHaveBeenCalled();
-    expect(runtimeErrors.join("\n")).toContain("run automatic gateway startup migrations");
+    expect(startGatewayServer).toHaveBeenCalled();
+    expect(runtimeErrors.join("\n")).not.toContain("run automatic gateway startup migrations");
   });
 
-  it("blocks a future-version service-mode late recovery candidate before restore", async () => {
+  it("allows a future-version service-mode late recovery candidate before restore", async () => {
     let recoveryAllowed: boolean | undefined;
     await withEnvAsync(
       {
@@ -1197,18 +1184,16 @@ describe("gateway run option collisions", () => {
           return { snapshot: configState.snapshot };
         });
 
-        await expect(runGatewayCli(["gateway", "run", "--allow-unconfigured"])).rejects.toThrow(
-          "__exit__:78",
-        );
+        await runGatewayCli(["gateway", "run", "--allow-unconfigured"]);
       },
     );
 
-    expect(recoveryAllowed).toBe(false);
-    expect(startGatewayServer).not.toHaveBeenCalled();
-    expect(runtimeErrors.join("\n")).toContain("start the gateway service");
+    expect(recoveryAllowed).toBe(true);
+    expect(startGatewayServer).toHaveBeenCalled();
+    expect(runtimeErrors.join("\n")).not.toContain("start the gateway service");
   });
 
-  it("blocks a future-version current config before suspicious recovery", async () => {
+  it("allows a future-version current config during suspicious recovery", async () => {
     let recoveryAllowed: boolean | undefined;
     readConfigFileSnapshotWithPluginMetadata.mockImplementationOnce(async (options) => {
       recoveryAllowed = await options?.allowSuspiciousRecovery?.(
@@ -1221,13 +1206,11 @@ describe("gateway run option collisions", () => {
       return { snapshot: configState.snapshot };
     });
 
-    await expect(runGatewayCli(["gateway", "run", "--allow-unconfigured"])).rejects.toThrow(
-      "__exit__:1",
-    );
+    await runGatewayCli(["gateway", "run", "--allow-unconfigured"]);
 
-    expect(recoveryAllowed).toBe(false);
-    expect(startGatewayServer).not.toHaveBeenCalled();
-    expect(runtimeErrors.join("\n")).toContain("run automatic gateway startup migrations");
+    expect(recoveryAllowed).toBe(true);
+    expect(startGatewayServer).toHaveBeenCalled();
+    expect(runtimeErrors.join("\n")).not.toContain("run automatic gateway startup migrations");
   });
 
   it("blocks a final startup snapshot that changes guarded config selection", async () => {

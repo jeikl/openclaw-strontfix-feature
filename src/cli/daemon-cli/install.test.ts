@@ -520,21 +520,24 @@ describe("runDaemonInstall", () => {
     expect(installDaemonServiceAndEmitMock).not.toHaveBeenCalled();
   });
 
-  it("blocks install from an older binary when config was written by a newer one", async () => {
+  it("allows install from an older binary when config was written by a newer one", async () => {
     readConfigFileSnapshotMock.mockResolvedValue({
-      exists: true,
+      exists: false,
       valid: true,
       config: { meta: { lastTouchedVersion: "9999.1.1" } },
-      sourceConfig: { meta: { lastTouchedVersion: "9999.1.1" } },
+      sourceConfig: {
+        meta: { lastTouchedVersion: "9999.1.1" },
+        gateway: { mode: "local", auth: { mode: "token" } },
+      },
     });
 
     await runDaemonInstall({ json: true, force: true });
 
-    expect(actionState.failed[0]?.message).toContain(
+    expect(actionState.failed.map((item) => item.message).join("\n")).not.toContain(
       "Refusing to install or rewrite the gateway service",
     );
-    expect(buildGatewayInstallPlanMock).not.toHaveBeenCalled();
-    expect(installDaemonServiceAndEmitMock).not.toHaveBeenCalled();
+    expect(buildGatewayInstallPlanMock).toHaveBeenCalled();
+    expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);
   });
 
   it("returns already-installed when the service already has the expected TLS env", async () => {

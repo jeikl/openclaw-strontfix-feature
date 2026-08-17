@@ -1,6 +1,5 @@
 // Daemon lifecycle config guard tests cover config checks before service lifecycle actions.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { VERSION } from "../../version.js";
 import {
   defaultRuntime,
   resetLifecycleRuntimeLogs,
@@ -11,11 +10,6 @@ import {
 
 const readConfigFileSnapshotMock = vi.fn();
 const loadConfig = vi.fn(() => ({}));
-const newerConfigHints = [
-  "Run the newer openclaw binary on PATH, or reinstall the intended gateway service from the newer install.",
-  "Set OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS=1 only for an intentional downgrade or recovery action.",
-];
-const newerConfigHintItems = newerConfigHints.map((text) => ({ kind: "generic", text }));
 const invalidConfigRecoveryHint = [
   'Run "openclaw doctor --fix" to repair, then retry.',
   "If startup is still blocked, inspect the adjacent .bak backup before restoring it manually.",
@@ -156,20 +150,13 @@ describe("runServiceRestart config pre-flight (#35862)", () => {
     });
   });
 
-  it("blocks restart from an older binary when config was written by a newer one", async () => {
+  it("allows restart from an older binary when config was written by a newer one", async () => {
     setConfigSnapshot({ exists: true, valid: true, lastTouchedVersion: "9999.1.1" });
 
-    await expect(runServiceRestart(createServiceRunArgs())).rejects.toThrow("__exit__:1");
+    const result = await runServiceRestart(createServiceRunArgs());
 
-    expect(service.restart).not.toHaveBeenCalled();
-    expectLatestRuntimeJson({
-      action: "restart",
-      ok: false,
-      error: `Gateway restart blocked: Refusing to restart the gateway service because this OpenClaw binary (${VERSION}) is older than the config last written by OpenClaw 9999.1.1.`,
-      hints: newerConfigHints,
-      hintItems: newerConfigHintItems,
-      warnings: undefined,
-    });
+    expect(result).toBe(true);
+    expect(service.restart).toHaveBeenCalledTimes(1);
   });
 
   it("proceeds with restart when config is valid", async () => {
@@ -295,25 +282,15 @@ describe("runServiceStop future-config guard", () => {
     resetLifecycleServiceMocks();
   });
 
-  it("blocks stop from an older binary when config was written by a newer one", async () => {
+  it("allows stop from an older binary when config was written by a newer one", async () => {
     setConfigSnapshot({ exists: true, valid: true, lastTouchedVersion: "9999.1.1" });
 
-    await expect(
-      runServiceStop({
-        serviceNoun: "Gateway",
-        service,
-        opts: { json: true },
-      }),
-    ).rejects.toThrow("__exit__:1");
-
-    expect(service.stop).not.toHaveBeenCalled();
-    expectLatestRuntimeJson({
-      action: "stop",
-      ok: false,
-      error: `Gateway stop blocked: Refusing to stop the gateway service because this OpenClaw binary (${VERSION}) is older than the config last written by OpenClaw 9999.1.1.`,
-      hints: newerConfigHints,
-      hintItems: newerConfigHintItems,
-      warnings: undefined,
+    await runServiceStop({
+      serviceNoun: "Gateway",
+      service,
+      opts: { json: true },
     });
+
+    expect(service.stop).toHaveBeenCalledTimes(1);
   });
 });

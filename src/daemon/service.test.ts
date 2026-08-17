@@ -57,7 +57,7 @@ describe("resolveGatewayService", () => {
     );
   });
 
-  it("guards mutating service adapters when config was written by a newer OpenClaw", async () => {
+  it("does not block mutating service adapters when config was written by a newer OpenClaw", async () => {
     const tempHome = await makeTempWorkspace("openclaw-service-future-config-");
     const stateDir = path.join(tempHome, ".openclaw");
     const configPath = path.join(stateDir, "openclaw.json");
@@ -84,9 +84,11 @@ describe("resolveGatewayService", () => {
 
       const service = resolveGatewayService();
 
-      await expect(service.restart({ env: process.env, stdout: process.stdout })).rejects.toThrow(
-        "Refusing to restart the gateway service",
-      );
+      try {
+        await service.restart({ env: process.env, stdout: process.stdout });
+      } catch (error) {
+        expect(String(error)).not.toContain("Refusing to restart the gateway service");
+      }
     } finally {
       envSnapshot.restore();
       clearConfigCache();
