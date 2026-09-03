@@ -259,6 +259,60 @@ function syncSessionStatusModelOverride(host: ToolStreamHost, data: Record<strin
   host.sessions.setModelOverride(targetSessionKey, override);
 }
 
+function toolArgsKeyCount(value: unknown): number {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return typeof value === "string" && value.trim() ? 1 : 0;
+  }
+  return Object.keys(value as object).length;
+}
+
+function commandHintFromToolData(data: Record<string, unknown>, name: string): string | undefined {
+  const meta = toTrimmedString(data.meta);
+  if (meta) {
+    return meta;
+  }
+  const title = toTrimmedString(data.title);
+  if (!title) {
+    return undefined;
+  }
+  const prefix = `${name} `;
+  if (name && title.toLowerCase().startsWith(prefix.toLowerCase())) {
+    const rest = title.slice(prefix.length).trim();
+    return rest || title;
+  }
+  return title;
+}
+
+function coerceIncomingToolArgs(data: Record<string, unknown>, name: string): unknown {
+  if (data.args !== undefined) {
+    return data.args;
+  }
+  if (data.arguments !== undefined) {
+    return data.arguments;
+  }
+  if (data.input !== undefined) {
+    return data.input;
+  }
+  const hint = commandHintFromToolData(data, name);
+  if (!hint) {
+    return undefined;
+  }
+  if (name === "exec" || name === "bash") {
+    return { command: hint };
+  }
+  return hint;
+}
+
+function preferRicherToolArgs(existing: unknown, incoming: unknown): unknown {
+  if (incoming === undefined) {
+    return existing;
+  }
+  if (existing === undefined) {
+    return incoming;
+  }
+  return toolArgsKeyCount(incoming) > toolArgsKeyCount(existing) ? incoming : existing;
+}
+
 function buildToolStreamMessage(entry: ToolStreamEntry): Record<string, unknown> {
   const content: Array<Record<string, unknown>> = [];
   content.push({
@@ -1121,21 +1175,24 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
     return;
   }
 
-  if (payload.stream !== "tool") {
+  const data = payload.data ?? {};
+  const isToolStream = payload.stream === "tool";
+  const isItemTool = payload.stream === "item" && (data.kind === "tool" || data.kind === "command");
+  const isCommandOutput = payload.stream === "command_output";
+  if (!isToolStream && !isItemTool && !isCommandOutput) {
     return;
   }
 
-  const data = payload.data ?? {};
-  const toolCallId = typeof data.toolCallId === "string" ? data.toolCallId : "";
+  const toolCallId = typeof data.toolCallId === "string" ? data.toolCallId.trim() : "";
   if (!toolCallId) {
     return;
   }
-  const name = typeof data.name === "string" ? data.name : "tool";
+  const name = typeof data.name === "string" && data.name.trim() ? data.name.trim() : "tool";
   const phase = typeof data.phase === "string" ? data.phase : "";
-  // Args only arrive on start today; keep them on later update/result events.
-  const args = phase === "start" ? data.args : undefined;
-  const output =
-    phase === "update"
+  const args = coerceIncomingToolArgs(data, name);
+  const output = isCommandOutput
+    ? formatToolOutput(data.output)
+    : phase === "update"
       ? formatToolOutput(data.partialResult)
       : phase === "result"
         ? formatToolOutput(data.result)
@@ -1177,9 +1234,7 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
     host.toolStreamOrder.push(toolCallId);
   } else {
     entry.name = name;
-    if (args !== undefined) {
-      entry.args = args;
-    }
+    entry.args = preferRicherToolArgs(entry.args, args);
     if (output !== undefined) {
       entry.output = output || undefined;
     }
@@ -1188,5 +1243,5 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
 
   entry.message = buildToolStreamMessage(entry);
   trimToolStream(host);
-  scheduleToolStreamSync(host, phase === "result");
+  scheduleToolStreamSync(host, phase === "result" || phase === "end");
 }

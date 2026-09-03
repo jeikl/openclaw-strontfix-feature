@@ -117,6 +117,71 @@ describe("tool-card extraction", () => {
     expect(done[0]?.outputText).toBe("ok");
   });
 
+  it("reads OpenAI tool_calls arrays and Anthropic tool_use input", () => {
+    const openai = extractToolCards(
+      {
+        role: "assistant",
+        tool_calls: [
+          {
+            id: "call_openai",
+            type: "function",
+            function: {
+              name: "exec",
+              arguments: '{"command":"uname -a"}',
+            },
+          },
+        ],
+      },
+      "msg:openai",
+    );
+    expect(openai).toHaveLength(1);
+    expect(openai[0]?.callId).toBe("call_openai");
+    expect(openai[0]?.name).toBe("exec");
+    expect(openai[0]?.args).toEqual({ command: "uname -a" });
+    expect(openai[0]?.inputText).toContain("uname -a");
+
+    const anthropic = extractToolCards(
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            id: "call_anthropic",
+            name: "exec",
+            input: { command: "df -h" },
+          },
+        ],
+      },
+      "msg:anthropic",
+    );
+    expect(anthropic[0]?.callId).toBe("call_anthropic");
+    expect(anthropic[0]?.args).toEqual({ command: "df -h" });
+
+    const both = extractToolCards(
+      {
+        role: "assistant",
+        tool_calls: [
+          {
+            id: "call_dup",
+            type: "function",
+            function: { name: "exec", arguments: '{"command":"echo hi"}' },
+          },
+        ],
+        content: [
+          {
+            type: "toolCall",
+            id: "call_dup",
+            name: "exec",
+            arguments: { command: "echo hi" },
+          },
+        ],
+      },
+      "msg:dup",
+    );
+    expect(both).toHaveLength(1);
+    expect(both[0]?.callId).toBe("call_dup");
+  });
+
   it("preserves tool-call input payloads from tool_use blocks", () => {
     const cards = extractToolCards(
       {

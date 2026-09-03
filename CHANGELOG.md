@@ -2,6 +2,19 @@
 
 Docs: https://docs.openclaw.ai
 
+## 2026.7.780
+
+### Highlights
+
+- **工具卡先出输入、再出输出 (Tool Cards Show Input Then Output):** agent 一发出 tool call（单个或并行）立刻画出 Input；对应 Output 合进同一张卡，执行中每张卡独立转圈，谁完成谁结束，不必等全部 tool 一起刷完成。
+- **直播命令不再丢 (Live Exec Args Survive):** `tool start` 丢失时仍从 `item`/`result` 的 `meta`、以及历史里同一 `toolCallId` 把命令补回卡片，避免只剩 Exec + 输出。
+
+### Fixes & Enhancements
+
+- **按 callId 配对并发工具 (Pair Concurrent Tools by callId):** 不再只认紧邻的一条 call/result；并行 exec 的输入和输出不会拆成两张卡或上下颠倒。
+- **OpenAI / Anthropic 协议都认 (OpenAI and Anthropic Tool Protocols):** 读取 Anthropic `tool_use.input`，以及 OpenAI 顶层 `tool_calls[].function.arguments`（含 JSON 字符串）；同一 id 不重复出卡。
+- **摘要用人话标签 (Human Tool Labels):** 折叠行用工具名（Exec）+ 命令摘要；展开为「输入 / 输出」，不再出现 Tool output exec 叠一层。
+
 ## 2026.7.759
 
 ### Highlights

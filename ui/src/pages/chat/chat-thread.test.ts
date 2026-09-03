@@ -1724,4 +1724,39 @@ describe("tool turn outcome annotation (#89683)", () => {
     ]);
     expect(assistantOrTool.some((group) => group.role === "tool" && group !== host)).toBe(false);
   });
+
+  it("copies exec args onto result-only cards that share a call id", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "tool_use", id: "call-df", name: "exec", input: { command: "df -h" } }],
+          timestamp: 1000,
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call-orphan",
+          toolName: "exec",
+          content: "disk",
+          timestamp: 1001,
+        },
+      ],
+      toolMessages: [
+        {
+          role: "toolResult",
+          toolCallId: "call-df",
+          toolName: "exec",
+          content: "/dev/mapper 146G",
+          timestamp: 1002,
+        },
+      ],
+    });
+
+    const cards = groups.flatMap((group) =>
+      group.messages.flatMap((entry) => extractToolCards(entry.message, entry.key)),
+    );
+    const df = cards.find((card) => card.callId === "call-df");
+    expect(df?.inputText).toContain("df -h");
+    expect(df?.outputText).toContain("/dev/mapper");
+  });
 });

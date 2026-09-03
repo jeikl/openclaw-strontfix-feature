@@ -1072,4 +1072,40 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     ]);
     vi.useRealTimers();
   });
+
+  it("uses item meta as exec input when the tool start has no args", () => {
+    useToolStreamFakeTimers();
+    const host = createHost();
+
+    handleAgentEvent(
+      host,
+      agentEvent("run-exec", 1, "item", {
+        phase: "start",
+        kind: "command",
+        title: "exec uname -a",
+        name: "exec",
+        toolCallId: "call-uname",
+        meta: "uname -a",
+      }),
+    );
+    vi.advanceTimersByTime(80);
+
+    expect(host.toolStreamById.get("call-uname")?.args).toEqual({ command: "uname -a" });
+
+    handleAgentEvent(
+      host,
+      agentEvent("run-exec", 2, "tool", {
+        phase: "result",
+        name: "exec",
+        toolCallId: "call-uname",
+        meta: "uname -a",
+        result: "Linux",
+      }),
+    );
+
+    const finished = host.toolStreamById.get("call-uname");
+    expect(finished?.args).toEqual({ command: "uname -a" });
+    expect(finished?.output).toBe("Linux");
+    vi.useRealTimers();
+  });
 });

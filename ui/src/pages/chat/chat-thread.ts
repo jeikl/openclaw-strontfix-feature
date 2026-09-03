@@ -2,6 +2,7 @@
 import {
   isToolCallContentType,
   isToolResultContentType,
+  resolveToolUseId,
 } from "../../../../src/chat/tool-content.js";
 import type {
   ChatItem,
@@ -438,7 +439,98 @@ function coalesceToolActivityMessages(items: ChatItem[]): ChatItem[] {
     coalesced.push(item);
     registerCallHosts(item, coalesced.length - 1);
   }
-  return coalesced;
+  return backfillToolArgsByCallId(coalesced);
+}
+
+function hasRenderableToolArgs(value: unknown): boolean {
+  if (value === undefined || value === null) {
+    return false;
+  }
+  if (typeof value === "string") {
+    return value.trim().length > 0;
+  }
+  if (Array.isArray(value)) {
+    return value.length > 0;
+  }
+  if (typeof value === "object") {
+    return Object.keys(value as object).length > 0;
+  }
+  return true;
+}
+
+function attachArgsToMessage(message: unknown, argsByCallId: Map<string, unknown>): unknown {
+  const record = asRecord(message);
+  if (!record || argsByCallId.size === 0) {
+    return message;
+  }
+  const messageCallId =
+    (typeof record.toolCallId === "string" && record.toolCallId.trim()) ||
+    (typeof record.tool_call_id === "string" && record.tool_call_id.trim()) ||
+    "";
+  const rawContent = Array.isArray(record.content)
+    ? record.content
+    : typeof record.content === "string"
+      ? [{ type: "text", text: record.content }]
+      : [];
+  let changed = false;
+  const nextContent = rawContent.map((block) => {
+    const typed = asRecord(block);
+    if (!typed || !isToolCallContentType(typed.type)) {
+      return block;
+    }
+    const callId = resolveToolUseId(typed) || messageCallId;
+    const args = callId ? argsByCallId.get(callId) : undefined;
+    if (!hasRenderableToolArgs(args)) {
+      return block;
+    }
+    if (hasRenderableToolArgs(typed.arguments ?? typed.args ?? typed.input)) {
+      return block;
+    }
+    changed = true;
+    return { ...typed, ...(callId ? { id: typed.id ?? callId } : {}), arguments: args };
+  });
+  const needsSyntheticCall =
+    Boolean(messageCallId) &&
+    argsByCallId.has(messageCallId) &&
+    !nextContent.some((block) => isToolCallContentType(asRecord(block)?.type));
+  if (needsSyntheticCall) {
+    const name =
+      (typeof record.toolName === "string" && record.toolName.trim()) ||
+      (typeof record.tool_name === "string" && record.tool_name.trim()) ||
+      "tool";
+    nextContent.unshift({
+      type: "toolcall",
+      id: messageCallId,
+      name,
+      arguments: argsByCallId.get(messageCallId),
+    });
+    changed = true;
+  }
+  return changed ? { ...record, content: nextContent } : message;
+}
+
+function backfillToolArgsByCallId(items: ChatItem[]): ChatItem[] {
+  const argsByCallId = new Map<string, unknown>();
+  for (const item of items) {
+    if (item.kind !== "message") {
+      continue;
+    }
+    for (const card of extractToolCardsCached(item.message, `${item.key}:args-backfill`)) {
+      if (card.callId && hasRenderableToolArgs(card.args)) {
+        argsByCallId.set(card.callId, card.args);
+      }
+    }
+  }
+  if (argsByCallId.size === 0) {
+    return items;
+  }
+  return items.map((item) => {
+    if (item.kind !== "message") {
+      return item;
+    }
+    const nextMessage = attachArgsToMessage(item.message, argsByCallId);
+    return nextMessage === item.message ? item : { ...item, message: nextMessage };
+  });
 }
 
 function assistantGroupHasReplyText(group: MessageGroup): boolean {

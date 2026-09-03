@@ -302,14 +302,46 @@ function findFirstUnmatchedCard(
   return nameOnlyCandidate;
 }
 
+function openaiToolCallsAsBlocks(message: Record<string, unknown>): Record<string, unknown>[] {
+  const raw = message.tool_calls ?? message.toolCalls;
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const blocks: Record<string, unknown>[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      continue;
+    }
+    const rec = entry as Record<string, unknown>;
+    const fn =
+      rec.function && typeof rec.function === "object" && !Array.isArray(rec.function)
+        ? (rec.function as Record<string, unknown>)
+        : null;
+    const name =
+      (typeof rec.name === "string" && rec.name.trim()) ||
+      (typeof fn?.name === "string" && fn.name.trim()) ||
+      "tool";
+    const args = rec.arguments ?? rec.args ?? rec.input ?? fn?.arguments ?? fn?.args;
+    const id = rec.id ?? rec.tool_call_id ?? rec.toolCallId ?? rec.tool_use_id ?? rec.toolUseId;
+    blocks.push({
+      type: "toolcall",
+      ...(typeof id === "string" && id.trim() ? { id: id.trim() } : {}),
+      name,
+      ...(args !== undefined ? { arguments: args } : {}),
+    });
+  }
+  return blocks;
+}
+
 export function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] {
   const m = message as Record<string, unknown>;
-  const content = normalizeContent(m.content);
+  const content = [...openaiToolCallsAsBlocks(m), ...normalizeContent(m.content)];
   const messageIsError = readToolErrorFlag(m);
   const cards: ToolCard[] = [];
   const fallbackMatchedCards = new WeakSet<ToolCard>();
   const transcriptMessageId = resolveTranscriptMessageId(m);
   const isLive = typeof m.runId === "string" && Boolean(m.runId.trim());
+  const seenCallIds = new Set<string>();
 
   for (let index = 0; index < content.length; index++) {
     const item = content[index] ?? {};
@@ -321,6 +353,12 @@ export function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] 
       const rawArgs = coerceArgs(item.arguments ?? item.args ?? item.input);
       const args = hasRenderableToolArgs(rawArgs) ? rawArgs : undefined;
       const callId = resolveToolCallId(item, m);
+      if (callId && seenCallIds.has(callId)) {
+        continue;
+      }
+      if (callId) {
+        seenCallIds.add(callId);
+      }
       cards.push({
         id: resolveToolCardId(item, m, index, prefix),
         ...(callId ? { callId } : {}),

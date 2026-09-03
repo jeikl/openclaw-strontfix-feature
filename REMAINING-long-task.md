@@ -3,7 +3,7 @@
 > 仓库：`/root/src-dev/openclaw-strontfix-feature`  
 > 设计稿：`DESIGN-long-task-serial-wake.md`  
 > 日期：2026-08-17  
-> 版本：2026.7.759
+> 版本：2026.7.780
 
 ---
 
@@ -26,7 +26,7 @@
 | ---------------------------------------------------------------------------------------------------- |
 | exec 交给运行时事件等待（最长 `maxWaitMs`），一条折叠 tool result                                    |
 | `tools.longTask`：`maxWaitMs`、`blockEndTurn`、按天 retention                                        |
-| `/stop` `/clear` `/new` 取消 waiter；759：`/stop` 与 WebUI Stop 强制 SIGKILL 残留 bash/exec           |
+| `/stop` `/clear` `/new` 取消 waiter；759：`/stop` 与 WebUI Stop 强制 SIGKILL 残留 bash/exec          |
 | task-registry `runtime=exec`，`tasks_status` / `tasks_list`                                          |
 | 完成通知立刻结束等待                                                                                 |
 | 优雅停机重挂：原 `startedAt` 接着算；输出写回原 tool 卡片；叫醒该会话                                |
