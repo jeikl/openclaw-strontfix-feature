@@ -2511,6 +2511,34 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     }
   },
   /**
+   * WebUI tool cards: load server-persisted exec/tool input+output for a session.
+   * Not transcript / model context — files under ~/.openclaw/tool-cards/.
+   */
+  "sessions.toolCards.get": async ({ params, respond }) => {
+    const p = params as { key?: unknown; sessionKey?: unknown };
+    const key = requireSessionKey(p.key ?? p.sessionKey, respond);
+    if (!key) {
+      return;
+    }
+    try {
+      const { listToolCardsForSession } = await import("../../infra/tool-card-store.js");
+      const { listLiveToolCardsForSession } = await import("../tool-card-persistence.js");
+      const disk = listToolCardsForSession(key);
+      const live = listLiveToolCardsForSession(key);
+      const byId = new Map<string, (typeof disk)[number]>();
+      for (const card of disk) {
+        byId.set(card.callId || card.id, card);
+      }
+      for (const card of live) {
+        byId.set(card.callId || card.id, card);
+      }
+      const cards = [...byId.values()].toSorted((a, b) => a.startedAt - b.startedAt);
+      respond(true, { sessionKey: key, cards }, undefined);
+    } catch (error) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
+    }
+  },
+  /**
    * WebUI diagnosis: load server-persisted run-stage cards for a session.
    * Not transcript / model context — files under ~/.openclaw/run-stage-cards/.
    */

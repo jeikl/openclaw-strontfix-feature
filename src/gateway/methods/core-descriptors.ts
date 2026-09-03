@@ -159,6 +159,7 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "sessions.messages.unsubscribe", scope: "operator.read" },
   { name: "sessions.runStages.get", scope: "operator.read" },
   { name: "sessions.runStages.put", scope: "operator.write" },
+  { name: "sessions.toolCards.get", scope: "operator.read" },
   { name: "sessions.preview", scope: "operator.read" },
   { name: "sessions.describe", scope: "operator.read" },
   { name: "sessions.compaction.list", scope: "operator.read" },

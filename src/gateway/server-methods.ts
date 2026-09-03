@@ -565,6 +565,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       // or createCoreGatewayMethodDescriptors skips them → "unknown method".
       "sessions.runStages.get",
       "sessions.runStages.put",
+      "sessions.toolCards.get",
       "sessions.preview",
       "sessions.describe",
       "sessions.resolve",

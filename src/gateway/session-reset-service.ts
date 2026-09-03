@@ -47,6 +47,7 @@ import { logVerbose } from "../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
 import { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
 import { clearRunStageCardsForSession } from "../infra/run-stage-store.js";
+import { clearToolCardsForSession } from "../infra/tool-card-store.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { runPluginHostCleanup } from "../plugins/host-hook-cleanup.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
@@ -1272,6 +1273,7 @@ export async function performGatewaySessionReset(params: {
       for (const stageKey of stageKeys) {
         if (stageKey?.trim()) {
           clearRunStageCardsForSession(stageKey);
+          clearToolCardsForSession(stageKey);
         }
       }
       // Always notify subscribed Control UI / TUI clients so a channel-side

@@ -30,6 +30,7 @@ import type {
 } from "./server-chat-state.js";
 import { resolveVisibleActiveSessionRunState } from "./server-methods/session-active-runs.js";
 import { mapTaskSummary, type TaskEventPayload } from "./server-methods/task-summary.js";
+import { startToolCardPersistence } from "./tool-card-persistence.js";
 
 function dispatchEventHandler<TEvent>(params: {
   loadHandler: () => Promise<(event: TEvent) => unknown>;
@@ -245,13 +246,15 @@ export function startGatewayEventSubscriptions(params: {
   // browsers can load them (not model context / transcript).
   // Channel-routed runs are usually NOT in chatRunState (only chat.send is);
   // fall back to agent run context sessionKey for those.
-  const stopRunStagePersistence = startRunStagePersistence((runId) => {
+  const resolveRunSessionKey = (runId: string) => {
     const chatLink = params.chatRunState.registry.peek(runId);
     if (chatLink?.sessionKey) {
       return chatLink.sessionKey;
     }
     return getAgentRunContext(runId)?.sessionKey ?? null;
-  });
+  };
+  const stopRunStagePersistence = startRunStagePersistence(resolveRunSessionKey);
+  const stopToolCardPersistence = startToolCardPersistence(resolveRunSessionKey);
 
   const unsubscribeAgentEvents = onAgentEvent((evt) => {
     auditRecorder?.record(evt);
@@ -307,6 +310,7 @@ export function startGatewayEventSubscriptions(params: {
   });
   const agentUnsub = async () => {
     stopRunStagePersistence();
+    stopToolCardPersistence();
     unsubscribeAgentEvents();
     unsubscribePrivateAuditEvents?.();
     unsubscribeToolAuditEvents?.();

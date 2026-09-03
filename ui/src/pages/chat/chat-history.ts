@@ -69,6 +69,12 @@ import {
   prunePersistedToolStreamMessages,
   visibleCurrentAssistantStreamTail,
 } from "./stream-reconciliation.ts";
+import {
+  applyPersistedToolCardsToMessages,
+  clearToolCardsForSession,
+  loadToolCardsForSession,
+  loadToolCardsFromGateway,
+} from "./tool-card-persist.ts";
 
 const SILENT_REPLY_PATTERN = /^\s*NO_REPLY\s*$/;
 const SYNTHETIC_TRANSCRIPT_REPAIR_RESULT =
@@ -765,6 +771,7 @@ export async function clearChatHistory(state: ClearChatHistoryState) {
     state.chatReplyTarget = null;
     // Drop stage/thinking diagnosis UI for this session (localStorage + live buffers).
     clearRunStageCardsForSession(sessionKey);
+    clearToolCardsForSession(sessionKey);
     const hostAny = state as ClearChatHistoryState & {
       chatRunStageCards?: unknown[];
       chatRunStages?: unknown[];
@@ -957,6 +964,27 @@ async function loadChatHistoryUncached(
       state.chatMessages = [...state.chatMessages, ...lateOptimisticTail];
     }
     replaceCachedChatMessages(state, sessionKey, state.chatMessages, requestAgentId);
+    const hydrateToolCards = () => {
+      if (!shouldApplyChatHistoryResult(state, requestVersion, sessionKey, requestAgentId)) {
+        return;
+      }
+      const apply = (cards: Awaited<ReturnType<typeof loadToolCardsFromGateway>>) => {
+        if (
+          cards.length === 0 ||
+          !shouldApplyChatHistoryResult(state, requestVersion, sessionKey, requestAgentId)
+        ) {
+          return;
+        }
+        state.chatMessages = applyPersistedToolCardsToMessages(state.chatMessages, cards);
+        (state as ChatState & { requestUpdate?: () => void }).requestUpdate?.();
+      };
+      if (isGatewayMethodAdvertised(state, "sessions.toolCards.get") === true) {
+        void loadToolCardsFromGateway(client, sessionKey).then(apply);
+        return;
+      }
+      apply(loadToolCardsForSession(sessionKey));
+    };
+    hydrateToolCards();
     state.currentSessionId =
       typeof res.sessionInfo?.sessionId === "string" && res.sessionInfo.sessionId.trim()
         ? res.sessionInfo.sessionId

@@ -109,6 +109,7 @@ import {
   clearChatMessagesFromCache,
   readChatMessagesFromCache,
 } from "./session-message-cache.ts";
+import { clearToolCardsForSession } from "./tool-card-persist.ts";
 import {
   handleAgentEvent,
   handleSessionOperationEvent,
@@ -984,6 +985,7 @@ function handleSessionsChangedEvent(state: ChatPageHost, payload: unknown) {
     sessionMessageMatchesChat(state, event)
   ) {
     clearRunStageCardsForSession(state.sessionKey);
+    clearToolCardsForSession(state.sessionKey);
     state.chatRunStageCards = [];
     state.chatRunStages = [];
     state.chatRunStageCardId = null;

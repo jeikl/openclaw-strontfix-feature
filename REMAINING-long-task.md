@@ -3,7 +3,7 @@
 > 仓库：`/root/src-dev/openclaw-strontfix-feature`  
 > 设计稿：`DESIGN-long-task-serial-wake.md`  
 > 日期：2026-08-17  
-> 版本：2026.7.780
+> 版本：2026.7.781
 
 ---
 

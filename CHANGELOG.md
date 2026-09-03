@@ -2,6 +2,17 @@
 
 Docs: https://docs.openclaw.ai
 
+## 2026.7.781
+
+### Highlights
+
+- **工具卡服务端持久化 (Persist Tool Cards Like Stage Cards):** 参照阶段/思考卡，把 tool 的 Input/Output 写入 `~/.openclaw/tool-cards/`，刷新后从 `sessions.toolCards.get` 补回同一张卡，不再只靠内存直播流。
+
+### Fixes & Enhancements
+
+- **刷新不再丢输出 (Refresh Keeps Tool Output):** 历史被截断或省略时，用磁盘上的完整输出替换 `[chat.history omitted: message too large]` 等占位。
+- **浏览器软缓存 (localStorage Soft Cache):** 键 `openclaw.controlUi.toolCards.v1`；RPC 失败或离线时回退。`/clear` 与 session reset 同时清磁盘和缓存。
+
 ## 2026.7.780
 
 ### Highlights
