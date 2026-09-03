@@ -150,7 +150,7 @@ With diagnostics enabled, `diagnostics.stuckSessionWarnMs` (default `120000` ms)
 ## Where things can end early
 
 - Agent timeout (abort). A finite `timeoutSeconds` is floored to `tools.longTask.maxWaitMs`
-- AbortSignal (cancel). `/stop` `/clear` `/new` cancel a long exec wait and kill the process; diagnostic stuck-session recovery, LLM idle, and tool abort do not
+- AbortSignal (cancel). `/stop` `/clear` `/new` cancel a long exec wait and force-kill leftover bash/exec (process-tree SIGKILL). WebUI Stop uses the same path. Diagnostic stuck-session recovery, LLM idle, and tool abort do not
 - Gateway disconnect or RPC timeout
 - `agent.wait` timeout (wait-only, does not stop the agent)
 - `tools.longTask.maxWaitMs` (exec wait expires; process is killed, turn continues with a folded `timed_out` result)

@@ -175,7 +175,7 @@ plugins.
     | `/reset [soft [message]]` | Reset the current session in place. `soft` keeps the transcript, drops reused CLI backend session ids, and reruns startup |
     | `/name <title>` | Name or rename the current session. Omit the title to see the current name and a suggestion |
     | `/compact [instructions]` | Compact the session context. See [Compaction](/concepts/compaction) |
-    | `/stop` | Abort the current run, including a long exec wait (kills the process) |
+    | `/stop` | Abort the current run, including a long exec wait. Cancels the waiter and force-kills leftover bash/exec (process-tree SIGKILL). WebUI Stop uses the same path. |
     | `/session idle <duration\|off>` | Manage thread-binding idle expiry |
     | `/session max-age <duration\|off>` | Manage thread-binding max-age expiry |
     | `/export-session [path]` | Export the current session to HTML. Alias: `/export` |
@@ -476,7 +476,7 @@ See [BTW side questions](/tools/btw) for the full behavior.
     - **Native Slack commands:** `agent:<agentId>:slack:slash:<userId>` (prefix configurable via `channels.slack.slashCommand.sessionPrefix`)
     - **Native Telegram commands:** `telegram:slash:<userId>` (targets the chat session via `CommandTargetSessionKey`)
     - **`/login codex`** sends device pairing codes only through private chat or Web UI response paths. Telegram group/topic invocations ask the owner to DM the bot instead.
-    - **`/stop`** targets the active chat session to abort the current run. If a long `exec` is waiting under `tools.longTask`, `/stop` (and `/clear` / `/new`) cancel that wait and kill the process. Diagnostic stuck-session recovery does not.
+    - **`/stop`** targets the active chat session to abort the current run. If a long `exec` is waiting under `tools.longTask`, `/stop` (and `/clear` / `/new`) cancel that wait and force-kill leftover bash/exec, including children that ignore SIGINT. WebUI Stop / `chat.abort` use the same forceful cleanup. Diagnostic stuck-session recovery does not.
 
   </Accordion>
   <Accordion title="Slack specifics">

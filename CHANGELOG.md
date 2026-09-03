@@ -2,6 +2,19 @@
 
 Docs: https://docs.openclaw.ai
 
+## 2026.7.759
+
+### Highlights
+
+- **用户 Stop 强杀残留进程 (Forceful /stop):** 渠道 `/stop`、WebUI Stop、`chat.abort` 取消长任务 waiter，并对该会话残留 bash/exec 做进程树 SIGKILL。忽略 SIGINT 的子进程也会被清掉。
+- **WebUI Stop 与渠道 /stop 同一套强停 (WebUI Stop Matches Channel /stop):** 无 `runId`、有 `runId`、渠道 fallback、排队 follow-up 都走强制清理。756 的 embedded abort 兜底未改。
+
+### Fixes & Enhancements
+
+- **带 runId 的 WebUI Stop 也会拆长任务 (Stop With runId Cancels Long Tasks):** 758 后工具 abort 不再杀 `maxWaitMs` 进程；Stop 必须显式 `cancelLongTasksForSession`，否则 exec 会继续跑。
+- **session key 别名也能对上 (Alias Session Keys Match):** `main` 与 `agent:main:main` 等别名会命中同一批 waiter / exec。
+- **收尾中的 run 不报假成功 (Finalizing Run Stays Finalizing):** agent 已不可 abort 时仍强杀残留 bash，回复仍是 already finalizing，不把 live reply 强清成“已停止”。
+
 ## 2026.7.758
 
 ### Highlights
