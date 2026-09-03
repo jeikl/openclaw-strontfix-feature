@@ -9,6 +9,7 @@ import {
   markExited,
   type ProcessSession,
 } from "./bash-process-registry.js";
+import { cancelLongTaskByProcessSession, listActiveLongTaskWaiters } from "./long-task-runtime.js";
 
 function normalizeScopeKey(value: string | undefined | null): string | undefined {
   if (typeof value !== "string") {
@@ -18,21 +19,72 @@ function normalizeScopeKey(value: string | undefined | null): string | undefined
   return trimmed ? trimmed : undefined;
 }
 
-function sessionMatchesScopeKeys(session: ProcessSession, scopeKeys: ReadonlySet<string>): boolean {
-  const scopeKey = normalizeScopeKey(session.scopeKey);
-  if (scopeKey && scopeKeys.has(scopeKey)) {
-    return true;
-  }
-  const sessionKey = normalizeScopeKey(session.sessionKey);
-  return Boolean(sessionKey && scopeKeys.has(sessionKey));
+function collectScopeKeys(values: Array<string | undefined | null> | undefined): Set<string> {
+  return new Set(
+    (values ?? [])
+      .map((key) => normalizeScopeKey(key))
+      .filter((key): key is string => Boolean(key)),
+  );
 }
 
-function terminateSessionFallback(session: ProcessSession): boolean {
+/** Same alias matching as channel /stop: `agent:main:main` vs `main`. */
+function keysLooselyMatch(left: string, right: string): boolean {
+  const a = left.trim().toLowerCase();
+  const b = right.trim().toLowerCase();
+  if (!a || !b) {
+    return false;
+  }
+  if (a === b) {
+    return true;
+  }
+  return a.endsWith(`:${b}`) || b.endsWith(`:${a}`);
+}
+
+function keyMatchesScopeKeys(
+  value: string | undefined,
+  scopeKeys: ReadonlySet<string>,
+  looseMatch: boolean,
+): boolean {
+  const key = normalizeScopeKey(value);
+  if (!key) {
+    return false;
+  }
+  if (scopeKeys.has(key)) {
+    return true;
+  }
+  if (!looseMatch) {
+    return false;
+  }
+  for (const scopeKey of scopeKeys) {
+    if (keysLooselyMatch(key, scopeKey)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function sessionMatchesScopeKeys(
+  session: ProcessSession,
+  scopeKeys: ReadonlySet<string>,
+  looseMatch = false,
+): boolean {
+  return (
+    keyMatchesScopeKeys(session.scopeKey, scopeKeys, looseMatch) ||
+    keyMatchesScopeKeys(session.sessionKey, scopeKeys, looseMatch) ||
+    keyMatchesScopeKeys(session.id, scopeKeys, false)
+  );
+}
+
+function terminateSessionFallback(session: ProcessSession, force = false): boolean {
   const pid = session.pid ?? session.child?.pid;
   if (typeof pid !== "number" || !Number.isFinite(pid) || pid <= 0) {
     return false;
   }
-  killProcessTree(pid);
+  if (force) {
+    killProcessTree(pid, { force: true });
+  } else {
+    killProcessTree(pid);
+  }
   return true;
 }
 
@@ -42,18 +94,19 @@ function terminateSessionFallback(session: ProcessSession): boolean {
  *
  * Mirrors process-tool kill semantics: prefer supervisor cancel (SIGINT-like
  * cancel path), then fall back to process-tree kill when unmanaged.
+ * User `/stop` passes `force` so SIGINT-ignoring children still die.
  */
 export function killRunningExecSessionsForScopes(params: {
   scopeKeys?: Array<string | undefined | null>;
+  force?: boolean;
+  looseMatch?: boolean;
 }): { attempted: number; sessionIds: string[] } {
-  const scopeKeys = new Set(
-    (params.scopeKeys ?? [])
-      .map((key) => normalizeScopeKey(key))
-      .filter((key): key is string => Boolean(key)),
-  );
+  const scopeKeys = collectScopeKeys(params.scopeKeys);
   if (scopeKeys.size === 0) {
     return { attempted: 0, sessionIds: [] };
   }
+  const looseMatch = params.looseMatch === true;
+  const force = params.force === true;
 
   const supervisor = getProcessSupervisor();
   for (const scopeKey of scopeKeys) {
@@ -66,7 +119,7 @@ export function killRunningExecSessionsForScopes(params: {
 
   const sessionIds: string[] = [];
   for (const session of listAllRunningSessions()) {
-    if (session.exited || !sessionMatchesScopeKeys(session, scopeKeys)) {
+    if (session.exited || !sessionMatchesScopeKeys(session, scopeKeys, looseMatch)) {
       continue;
     }
     sessionIds.push(session.id);
@@ -78,13 +131,74 @@ export function killRunningExecSessionsForScopes(params: {
       } catch {
         // Best-effort per session.
       }
-      continue;
+      if (!force) {
+        continue;
+      }
     }
 
-    if (terminateSessionFallback(session) && !session.exited) {
+    if (terminateSessionFallback(session, force) && !session.exited) {
       markExited(session, null, "SIGKILL", "failed");
     }
   }
 
   return { attempted: sessionIds.length, sessionIds };
+}
+
+export type ForceStopSessionExecWorkResult = {
+  attempted: number;
+  sessionIds: string[];
+  cancelledLongTasks: number;
+};
+
+/**
+ * User `/stop` / Control UI Stop: cancel long-task waiters and force-kill
+ * leftover exec/bash for the session, including alias keys and SIGINT-trapping
+ * children. System abort must not use this helper.
+ */
+export function forceStopSessionExecWork(params: {
+  scopeKeys?: Array<string | undefined | null>;
+  reason?: string;
+}): ForceStopSessionExecWorkResult {
+  const scopeKeys = collectScopeKeys(params.scopeKeys);
+  const reason = params.reason?.trim() || "stop";
+  if (scopeKeys.size === 0) {
+    return { attempted: 0, sessionIds: [], cancelledLongTasks: 0 };
+  }
+
+  let cancelledLongTasks = 0;
+  for (const waiter of listActiveLongTaskWaiters()) {
+    const matches =
+      keyMatchesScopeKeys(waiter.processSessionId, scopeKeys, false) ||
+      keyMatchesScopeKeys(waiter.sessionKey, scopeKeys, true);
+    if (!matches) {
+      continue;
+    }
+    if (!waiter.controller.signal.aborted) {
+      waiter.controller.abort(reason);
+      cancelledLongTasks += 1;
+    }
+    const pid = waiter.pid;
+    if (typeof pid === "number" && Number.isFinite(pid) && pid > 0) {
+      try {
+        killProcessTree(pid, { force: true });
+      } catch {
+        // Process may have already exited.
+      }
+    }
+  }
+
+  const killedExecs = killRunningExecSessionsForScopes({
+    scopeKeys: [...scopeKeys],
+    force: true,
+    looseMatch: true,
+  });
+  for (const sessionId of killedExecs.sessionIds) {
+    cancelLongTaskByProcessSession(sessionId, reason);
+  }
+
+  return {
+    attempted: killedExecs.attempted + cancelledLongTasks,
+    sessionIds: killedExecs.sessionIds,
+    cancelledLongTasks,
+  };
 }

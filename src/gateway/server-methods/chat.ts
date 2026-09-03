@@ -39,7 +39,7 @@ import {
   resolveAgentWorkspaceDir,
   resolveSessionAgentId,
 } from "../../agents/agent-scope.js";
-import { killRunningExecSessionsForScopes } from "../../agents/bash-process-kill.js";
+import { forceStopSessionExecWork } from "../../agents/bash-process-kill.js";
 import {
   abortEmbeddedAgentRun,
   abortEmbeddedAgentRunByRunId,
@@ -343,6 +343,13 @@ function shouldIncludeChatSendAckServerTiming(client?: {
 }
 
 const CONTROL_UI_RECONNECT_RESUME_PARAM = "__controlUiReconnectResume";
+
+function forceStopChatAbortSideWork(scopeKeys: Array<string | undefined | null>): {
+  attempted: number;
+  sessionIds: string[];
+} {
+  return forceStopSessionExecWork({ scopeKeys, reason: "stop" });
+}
 
 function resolveControlUiReconnectResumeParams(
   params: unknown,
@@ -3533,11 +3540,13 @@ export const chatHandlers: GatewayRequestHandlers = {
           }
         }
       }
-      // Always free leftover in-progress exec/bash for this session on Stop,
-      // including backgrounded sessions that tool-abort deliberately leaves running.
-      const killedExecs = killRunningExecSessionsForScopes({
-        scopeKeys: [canonicalAbortSessionKey, rawSessionKey, embeddedSessionId],
-      });
+      // User Stop must tear down long-task waiters and leftover exec/bash.
+      // Tool-level abort no longer kills maxWaitMs-owned processes.
+      const killedExecs = forceStopChatAbortSideWork([
+        canonicalAbortSessionKey,
+        rawSessionKey,
+        embeddedSessionId,
+      ]);
       if (!aborted && killedExecs.attempted > 0) {
         aborted = true;
         if (runIds.length === 0) {
@@ -3663,10 +3672,20 @@ export const chatHandlers: GatewayRequestHandlers = {
           stopReason: "rpc",
           allowSessionMismatch: true,
         });
+        const killedExecs = forceStopChatAbortSideWork([
+          queued.sessionKey,
+          canonicalAbortSessionKey,
+          rawSessionKey,
+        ]);
+        const aborted = queuedRes.aborted || killedExecs.attempted > 0;
         respond(true, {
           ok: true,
-          aborted: queuedRes.aborted,
-          runIds: queuedRes.aborted ? [runId] : [],
+          aborted,
+          runIds: queuedRes.aborted
+            ? [runId]
+            : killedExecs.attempted > 0
+              ? killedExecs.sessionIds
+              : [],
         });
         return;
       }
@@ -3688,9 +3707,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           runIds = [runId, embeddedSessionId];
         }
       }
-      const killedExecs = killRunningExecSessionsForScopes({
-        scopeKeys: [canonicalAbortSessionKey, rawSessionKey],
-      });
+      const killedExecs = forceStopChatAbortSideWork([canonicalAbortSessionKey, rawSessionKey]);
       if (!runAborted && killedExecs.attempted > 0) {
         runAborted = true;
         runIds = killedExecs.sessionIds;
@@ -3748,10 +3765,14 @@ export const chatHandlers: GatewayRequestHandlers = {
         ],
       });
     }
-    // Free leftover backgrounded execs for this chat session on Stop.
-    const killedExecs = killRunningExecSessionsForScopes({
-      scopeKeys: [active.sessionKey, active.sessionId, canonicalAbortSessionKey, rawSessionKey],
-    });
+    // User Stop must also cancel long-task waiters; aborting the agent run
+    // no longer kills maxWaitMs-owned exec/bash.
+    const killedExecs = forceStopChatAbortSideWork([
+      active.sessionKey,
+      active.sessionId,
+      canonicalAbortSessionKey,
+      rawSessionKey,
+    ]);
     const aborted = res.aborted || killedExecs.attempted > 0;
     respond(true, {
       ok: true,

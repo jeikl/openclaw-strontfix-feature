@@ -30,13 +30,19 @@ let getSession: typeof import("./bash-process-registry.js").getSession;
 let resetProcessRegistryForTests: typeof import("./bash-process-registry.js").resetProcessRegistryForTests;
 let createProcessSessionFixture: typeof import("./bash-process-registry.test-helpers.js").createProcessSessionFixture;
 let killRunningExecSessionsForScopes: typeof import("./bash-process-kill.js").killRunningExecSessionsForScopes;
+let forceStopSessionExecWork: typeof import("./bash-process-kill.js").forceStopSessionExecWork;
+let registerLongTaskWaiterForTests: typeof import("./long-task-runtime.js").registerLongTaskWaiterForTests;
+let resetLongTaskRuntimeForTests: typeof import("./long-task-runtime.js").resetLongTaskRuntimeForTests;
 
 describe("killRunningExecSessionsForScopes", () => {
   beforeAll(async () => {
     ({ addSession, getFinishedSession, getSession, resetProcessRegistryForTests } =
       await import("./bash-process-registry.js"));
     ({ createProcessSessionFixture } = await import("./bash-process-registry.test-helpers.js"));
-    ({ killRunningExecSessionsForScopes } = await import("./bash-process-kill.js"));
+    ({ killRunningExecSessionsForScopes, forceStopSessionExecWork } =
+      await import("./bash-process-kill.js"));
+    ({ registerLongTaskWaiterForTests, resetLongTaskRuntimeForTests } =
+      await import("./long-task-runtime.js"));
   });
 
   beforeEach(() => {
@@ -49,6 +55,7 @@ describe("killRunningExecSessionsForScopes", () => {
 
   afterEach(() => {
     resetProcessRegistryForTests();
+    resetLongTaskRuntimeForTests();
   });
 
   it("cancels managed foreground and backgrounded sessions for a scope", () => {
@@ -149,5 +156,95 @@ describe("killRunningExecSessionsForScopes", () => {
     });
     expect(supervisorMock.cancelScope).not.toHaveBeenCalled();
     expect(getSession("keep")).toBeDefined();
+  });
+
+  it("force-kills managed sessions that ignore supervisor cancel", () => {
+    supervisorMock.getRecord.mockReturnValue({ runId: "sess", state: "running" });
+    const session = createProcessSessionFixture({
+      id: "trap-int",
+      command: "sleep 999",
+      backgrounded: true,
+      pid: 7777,
+    });
+    session.scopeKey = "agent:main:main";
+    addSession(session);
+
+    const result = killRunningExecSessionsForScopes({
+      scopeKeys: ["agent:main:main"],
+      force: true,
+    });
+
+    expect(result.sessionIds).toEqual(["trap-int"]);
+    expect(supervisorMock.cancel).toHaveBeenCalledWith("trap-int", "manual-cancel");
+    expect(killProcessTreeMock).toHaveBeenCalledWith(7777, { force: true });
+    expect(getSession("trap-int")).toBeUndefined();
+    expect(getFinishedSession("trap-int")?.status).toBe("failed");
+  });
+
+  it("matches alias session keys when looseMatch is set", () => {
+    supervisorMock.getRecord.mockReturnValue({ runId: "sess", state: "running" });
+    const session = createProcessSessionFixture({
+      id: "alias-sess",
+      command: "sleep 10",
+      backgrounded: true,
+      pid: 88,
+    });
+    session.scopeKey = "agent:main:main";
+    addSession(session);
+
+    const result = killRunningExecSessionsForScopes({
+      scopeKeys: ["main"],
+      looseMatch: true,
+    });
+
+    expect(result.sessionIds).toEqual(["alias-sess"]);
+    expect(supervisorMock.cancel).toHaveBeenCalledWith("alias-sess", "manual-cancel");
+  });
+
+  describe("forceStopSessionExecWork", () => {
+    it("cancels long-task waiters and force-kills leftover exec", () => {
+      supervisorMock.getRecord.mockReturnValue({ runId: "sess", state: "running" });
+      const session = createProcessSessionFixture({
+        id: "lt-exec",
+        command: "sleep 600",
+        backgrounded: true,
+        pid: 4243,
+      });
+      session.scopeKey = "agent:main:main";
+      addSession(session);
+      const controller = registerLongTaskWaiterForTests({
+        processSessionId: "lt-exec",
+        sessionKey: "agent:main:main",
+        pid: 4243,
+      });
+
+      const result = forceStopSessionExecWork({
+        scopeKeys: ["main"],
+        reason: "stop",
+      });
+
+      expect(controller.signal.aborted).toBe(true);
+      expect(controller.signal.reason).toBe("stop");
+      expect(result.cancelledLongTasks).toBe(1);
+      expect(result.sessionIds).toEqual(["lt-exec"]);
+      expect(result.attempted).toBeGreaterThan(0);
+      expect(killProcessTreeMock).toHaveBeenCalledWith(4243, { force: true });
+    });
+
+    it("reports attempted when only a long-task waiter exists", () => {
+      const controller = registerLongTaskWaiterForTests({
+        processSessionId: "waiter-only",
+        sessionKey: "agent:main:dingtalk:1",
+      });
+
+      const result = forceStopSessionExecWork({
+        scopeKeys: ["agent:main:dingtalk:1"],
+        reason: "stop",
+      });
+
+      expect(controller.signal.aborted).toBe(true);
+      expect(result.cancelledLongTasks).toBe(1);
+      expect(result.attempted).toBeGreaterThan(0);
+    });
   });
 });

@@ -5,7 +5,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { getAcpSessionManager } from "../../acp/control-plane/manager.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
-import { killRunningExecSessionsForScopes } from "../../agents/bash-process-kill.js";
+import { forceStopSessionExecWork } from "../../agents/bash-process-kill.js";
 import {
   abortEmbeddedAgentRun,
   abortEmbeddedAgentRunByRunId,
@@ -14,7 +14,6 @@ import {
   listActiveEmbeddedRunSessionKeys,
   resolveActiveEmbeddedRunSessionId,
 } from "../../agents/embedded-agent-runner/runs.js";
-import { cancelLongTasksForSession } from "../../agents/long-task-runtime.js";
 import {
   getLatestSubagentRunByChildSessionKey,
   listSubagentRunsForController,
@@ -205,26 +204,32 @@ export function abortSessionRunTargetWithOutcome(params: { key?: string; session
     // Also try treating sessionId as a runId (channel/webchat often share ids).
     aborted = abortDeps.abortEmbeddedAgentRunByRunId(sessionId) || aborted;
   }
-  for (const candidateKey of keys) {
-    cancelLongTasksForSession(candidateKey, "stop");
-  }
-  // Free leftover in-progress exec/bash for this stop target, including
-  // backgrounded sessions that tool-level abort intentionally leaves running.
-  const killedExecs = killRunningExecSessionsForScopes({
+  // User /stop must cancel long-task waiters and force-kill leftover exec/bash.
+  // Tool-level abort no longer kills maxWaitMs-owned processes.
+  const killedExecs = forceStopSessionExecWork({
     scopeKeys: [...keys, ...sessionIds],
+    reason: "stop",
   });
-  if (killedExecs.attempted > 0) {
+  // Always force-kill leftover exec/bash. Do not treat that cleanup as aborting
+  // an already-active unabortable (finalizing) agent run.
+  if (killedExecs.attempted > 0 && !active) {
     aborted = true;
     active = true;
   }
   // If a tracked run is still active after soft abort, force-clear the lane so
   // subsequent channel messages are not stuck behind a zombie registration.
-  for (const sessionId of sessionIds) {
-    if (abortDeps.isEmbeddedAgentRunActive(sessionId)) {
-      const forceCleared = abortDeps.forceClearEmbeddedAgentRun(sessionId, key, "user_abort");
-      if (forceCleared) {
-        aborted = true;
-        active = true;
+  // Leave unabortable (finalizing) reply runs alone so /stop does not report success.
+  const liveReplyStillActive = [...keys].some((candidateKey) =>
+    replyRunRegistry.isActive(candidateKey),
+  );
+  if (!liveReplyStillActive) {
+    for (const sessionId of sessionIds) {
+      if (abortDeps.isEmbeddedAgentRunActive(sessionId)) {
+        const forceCleared = abortDeps.forceClearEmbeddedAgentRun(sessionId, key, "user_abort");
+        if (forceCleared) {
+          aborted = true;
+          active = true;
+        }
       }
     }
   }

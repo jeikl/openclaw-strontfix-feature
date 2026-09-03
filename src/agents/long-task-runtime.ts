@@ -503,6 +503,10 @@ export function listActiveLongTasksForSession(sessionKey: string | undefined): L
     .filter((waiter): waiter is LongTaskWaiter => Boolean(waiter));
 }
 
+export function listActiveLongTaskWaiters(): LongTaskWaiter[] {
+  return [...waitersByProcessSession.values()];
+}
+
 export function shouldBlockEndTurnForSession(
   sessionKey: string | undefined,
   cfg?: ResolvedLongTaskConfig,
@@ -1201,8 +1205,10 @@ export function markStaleExecTaskLost(
 export function registerLongTaskWaiterForTests(params: {
   processSessionId: string;
   sessionKey: string;
-}): void {
+  pid?: number;
+}): AbortController {
   const now = Date.now();
+  const controller = new AbortController();
   registerWaiter({
     processSessionId: params.processSessionId,
     sessionKey: params.sessionKey,
@@ -1211,9 +1217,11 @@ export function registerLongTaskWaiterForTests(params: {
     startedAt: now,
     deadlineAt: now + 1_800_000,
     maxWaitMs: 1_800_000,
-    controller: new AbortController(),
+    controller,
     finished: createFinishedSignal(),
+    pid: params.pid,
   });
+  return controller;
 }
 
 export function resetLongTaskRuntimeForTests(): void {
@@ -1228,7 +1236,7 @@ export function resetLongTaskRuntimeForTests(): void {
 }
 
 export function listLongTaskWaitersForTests(): LongTaskWaiter[] {
-  return [...waitersByProcessSession.values()];
+  return listActiveLongTaskWaiters();
 }
 
 export function formatLongTaskQueryRecord(task: TaskRecord): {
