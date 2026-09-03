@@ -35,6 +35,7 @@ import {
   formatCollapsedToolPreviewText,
   formatCollapsedToolSummaryText,
   isToolCardError,
+  isToolCardRunning,
 } from "../../../lib/chat/tool-cards.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
 import { resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
@@ -2127,7 +2128,7 @@ function renderGroupedMessage(
   const pairingQrExpiryNotices = extractPairingQrExpiryNotices(message);
   const hasPairingQrExpiryNotices = pairingQrExpiryNotices.length > 0;
 
-  const extractedText = resolveNormalizedMessageMarkdown(normalizedMessage);
+  const extractedTextRaw = resolveNormalizedMessageMarkdown(normalizedMessage);
   const assistantAttachments = normalizedMessage.content.filter(
     (item): item is AttachmentItem => item.type === "attachment",
   );
@@ -2137,7 +2138,6 @@ function renderGroupedMessage(
   );
   const extractedThinking =
     opts.showReasoning && role === "assistant" ? extractThinkingCached(message) : null;
-  const markdownBase = extractedText?.trim() ? extractedText : null;
   const thinkingPanel = extractedThinking
     ? renderThinkingPanel({
         text: extractedThinking,
@@ -2150,7 +2150,17 @@ function renderGroupedMessage(
     : null;
   // Keep legacy markdown helper for tests that still assert italic reasoning text.
   void formatReasoningMarkdown;
-  const markdown = markdownBase;
+  const markdownBase = extractedTextRaw?.trim() ? extractedTextRaw : null;
+  const markdownDuplicatesToolOutput =
+    Boolean(markdownBase) &&
+    toolCards.some((card) => (card.outputText?.trim() ?? "") === markdownBase.trim());
+  const markdown =
+    isStandaloneToolMessage && hasToolCards
+      ? markdownDuplicatesToolOutput || !markdownBase
+        ? null
+        : markdownBase
+      : markdownBase;
+  const extractedText = markdown;
   const markdownRenderOptions: MarkdownRenderOptions = {
     codeBlockChrome: role === "user" ? "none" : "copy",
     fileLinks: true,
@@ -2188,6 +2198,7 @@ function renderGroupedMessage(
   const toolNames = [...new Set(toolCards.map((c) => c.name))];
   const singleToolCard = toolCards.length === 1 ? toolCards[0] : null;
   const toolMessageHasError = toolCards.some(isToolCardError) && opts.turnSucceeded !== true;
+  const toolMessageIsRunning = !toolMessageHasError && toolCards.some(isToolCardRunning);
   const singleToolDisplay = singleToolCard
     ? resolveToolDisplay({
         name: singleToolCard.name,
@@ -2216,10 +2227,12 @@ function renderGroupedMessage(
         : `${toolNames.slice(0, 2).join(", ")} +${toolNames.length - 2} more`;
   const toolPreview = markdown ? (formatCollapsedToolPreviewText(markdown) ?? "") : "";
   const toolMessageLabelRaw = toolMessageHasError
-    ? "Tool error"
-    : singleToolDisplay && !markdown && !hasImages
+    ? t("chat.toolCards.toolError")
+    : singleToolDisplay
       ? singleToolDisplay.label
-      : "Tool output";
+      : toolNames.length <= 3
+        ? toolNames.join(", ")
+        : `${toolNames.slice(0, 2).join(", ")} +${toolNames.length - 2} more`;
   const toolMessageLabel =
     formatCollapsedToolSummaryText(toolMessageLabelRaw) ?? toolMessageLabelRaw;
   const toolSummaryLabel = formatDistinctCollapsedToolSummaryText(
@@ -2259,9 +2272,12 @@ function renderGroupedMessage(
               <button
                 class="chat-tool-msg-summary ${toolMessageHasError
                   ? "chat-tool-msg-summary--error"
-                  : ""}"
+                  : toolMessageIsRunning
+                    ? "chat-tool-msg-summary--running"
+                    : ""}"
                 type="button"
                 aria-expanded=${String(toolMessageExpanded)}
+                aria-busy=${toolMessageIsRunning ? "true" : "false"}
                 @click=${(event: MouseEvent) => {
                   if (shouldToggleSelectableDisclosure(event)) {
                     opts.onToggleToolMessageExpanded?.(toolMessageDisclosureId);
@@ -2274,7 +2290,18 @@ function renderGroupedMessage(
                   ? html`<span class="chat-tool-msg-summary__names">${toolSummaryLabel}</span>`
                   : toolPreview
                     ? html`<span class="chat-tool-msg-summary__preview">${toolPreview}</span>`
-                    : nothing}
+                    : toolMessageIsRunning
+                      ? html`<span class="chat-tool-msg-summary__names"
+                          >${t("chat.toolCards.running")}</span
+                        >`
+                      : nothing}
+                ${toolMessageIsRunning
+                  ? html`<span
+                      class="chat-tool-msg-summary__spinner"
+                      title=${t("chat.toolCards.running")}
+                      aria-hidden="true"
+                    ></span>`
+                  : nothing}
               </button>
               ${toolMessageExpanded
                 ? html`

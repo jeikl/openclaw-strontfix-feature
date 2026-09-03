@@ -1663,4 +1663,65 @@ describe("tool turn outcome annotation (#89683)", () => {
     ]);
     expect(tools.map((group) => group.turnSucceeded)).toEqual([true, false]);
   });
+
+  it("pairs concurrent tool results onto the originating assistant call by id", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            { type: "tool_use", id: "call-a", name: "exec", input: { command: "echo a" } },
+            { type: "tool_use", id: "call-b", name: "read", input: { path: "a.txt" } },
+          ],
+          timestamp: 1000,
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call-b",
+          toolName: "read",
+          content: "file a",
+          timestamp: 1001,
+        },
+        {
+          role: "user",
+          content: "ignore me",
+          timestamp: 1002,
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call-a",
+          toolName: "exec",
+          content: "a\n",
+          timestamp: 1003,
+        },
+      ],
+    });
+
+    const assistantOrTool = groups.filter(
+      (group) => group.role === "tool" || group.role === "assistant",
+    );
+    const host = groups.find((group) =>
+      extractToolCards(group.messages[0]?.message, "concurrent").some(
+        (card) => card.callId === "call-a",
+      ),
+    );
+    expect(host).toBeTruthy();
+    const cards = extractToolCards(host!.messages[0]?.message, "concurrent");
+    expect(cards).toHaveLength(2);
+    expect(
+      cards.map((card) => ({ id: card.callId, output: card.outputText, input: card.inputText })),
+    ).toEqual([
+      {
+        id: "call-a",
+        output: "a\n",
+        input: '{\n  "command": "echo a"\n}',
+      },
+      {
+        id: "call-b",
+        output: "file a",
+        input: '{\n  "path": "a.txt"\n}',
+      },
+    ]);
+    expect(assistantOrTool.some((group) => group.role === "tool" && group !== host)).toBe(false);
+  });
 });

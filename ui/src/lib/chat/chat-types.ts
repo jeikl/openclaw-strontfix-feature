@@ -128,6 +128,8 @@ export type NormalizedMessage = {
     | null;
 };
 
+export type ToolCardStatus = "running" | "completed" | "error";
+
 /** Tool card representation for inline tool call/result rendering */
 export type ToolCard = {
   id: string;
@@ -137,6 +139,8 @@ export type ToolCard = {
   inputText?: string;
   outputText?: string;
   isError?: boolean;
+  /** Live tools without a result yet. Independent per card. */
+  status?: ToolCardStatus;
   messageId?: string;
   preview?: {
     kind: "canvas";

@@ -11,6 +11,7 @@ import {
   formatCollapsedToolPreviewText,
   formatCollapsedToolSummaryText,
   isToolCardError,
+  isToolCardRunning,
   type ToolPreview,
 } from "../../../lib/chat/tool-cards.ts";
 import {
@@ -92,19 +93,21 @@ export function buildToolCardSidebarContent(card: ToolCard): string {
   if (card.inputText?.trim()) {
     const inputIsJson = typeof card.args === "object" && card.args !== null;
     sections.push(
-      `### Tool input\n${formatPayloadForSidebar(card.inputText, inputIsJson ? "json" : "text")}`,
+      `### ${t("chat.toolCards.input")}\n${formatPayloadForSidebar(card.inputText, inputIsJson ? "json" : "text")}`,
     );
   }
 
   if (card.outputText?.trim()) {
     sections.push(
-      `### ${isError ? "Tool error" : "Tool output"}\n${formatToolOutputForSidebar(card.outputText)}`,
+      `### ${isError ? t("chat.toolCards.toolError") : t("chat.toolCards.output")}\n${formatToolOutputForSidebar(card.outputText)}`,
     );
+  } else if (isToolCardRunning(card)) {
+    sections.push(`### ${t("chat.toolCards.output")}\n*${t("chat.toolCards.runningHint")}*`);
   } else {
     sections.push(
       isError
-        ? "### Tool error\n*No output — tool failed.*"
-        : "### Tool output\n*No output — tool completed successfully.*",
+        ? `### ${t("chat.toolCards.toolError")}\n*No output — tool failed.*`
+        : `### ${t("chat.toolCards.output")}\n*${t("chat.toolCards.noOutput")}*`,
     );
   }
 
@@ -245,7 +248,7 @@ export function renderRawOutputToggle(text: string) {
         <span class="chat-tool-card__raw-toggle-icon">${icons.chevronDown}</span>
       </button>
       <div class="chat-tool-card__raw-body" hidden>
-        ${renderToolDataBlock({ label: "Tool output", text })}
+        ${renderToolDataBlock({ label: t("chat.toolCards.output"), text })}
       </div>
     </div>
   `;
@@ -271,16 +274,22 @@ function renderCollapsedToolSummary(params: {
   name?: string;
   expanded: boolean;
   isError?: boolean;
+  isRunning?: boolean;
   onToggleExpanded: () => void;
 }) {
-  const { label, icon, name, expanded, isError, onToggleExpanded } = params;
+  const { label, icon, name, expanded, isError, isRunning, onToggleExpanded } = params;
   const displayLabel = formatCollapsedToolSummaryText(label) ?? label;
   const displayName = formatDistinctCollapsedToolSummaryText(name, displayLabel);
   return html`
     <button
-      class="chat-tool-msg-summary ${isError ? "chat-tool-msg-summary--error" : ""}"
+      class="chat-tool-msg-summary ${isError
+        ? "chat-tool-msg-summary--error"
+        : isRunning
+          ? "chat-tool-msg-summary--running"
+          : ""}"
       type="button"
       aria-expanded=${String(expanded)}
+      aria-busy=${isRunning ? "true" : "false"}
       @click=${(event: MouseEvent) => {
         if (shouldToggleSelectableDisclosure(event)) {
           onToggleExpanded();
@@ -291,6 +300,13 @@ function renderCollapsedToolSummary(params: {
       <span class="chat-tool-msg-summary__label">${displayLabel}</span>
       ${displayName
         ? html`<span class="chat-tool-msg-summary__names">${displayName}</span>`
+        : nothing}
+      ${isRunning
+        ? html`<span
+            class="chat-tool-msg-summary__spinner"
+            title=${t("chat.toolCards.running")}
+            aria-hidden="true"
+          ></span>`
         : nothing}
     </button>
   `;
@@ -347,6 +363,7 @@ export function renderToolCard(
 ) {
   const display = resolveToolDisplay({ name: card.name, args: card.args, detailMode: "explain" });
   const isError = isToolCardError(card) && opts.turnSucceeded !== true;
+  const isRunning = isToolCardRunning(card) && !isError;
   const summary = resolveCollapsedToolSummaryParts({
     card,
     displayLabel: display.label,
@@ -363,9 +380,10 @@ export function renderToolCard(
       ${renderCollapsedToolSummary({
         label: summary.label,
         icon: renderToolIcon(display.icon),
-        name: summary.name,
+        name: summary.name ?? (isRunning ? t("chat.toolCards.running") : undefined),
         expanded: opts.expanded,
         isError,
+        isRunning,
         onToggleExpanded: () => opts.onToggleExpanded(card.id),
       })}
       ${opts.expanded
@@ -448,7 +466,7 @@ export function renderExpandedToolCardContent(
         : nothing}
       ${hasInput
         ? renderToolDataBlock({
-            label: "Tool input",
+            label: t("chat.toolCards.input"),
             text: card.inputText!,
           })
         : nothing}
@@ -456,15 +474,17 @@ export function renderExpandedToolCardContent(
         ? card.preview
           ? html`${visiblePreview} ${renderRawOutputToggle(card.outputText!)}`
           : renderToolDataBlock({
-              label: isError ? "Tool error" : "Tool output",
+              label: isError ? t("chat.toolCards.toolError") : t("chat.toolCards.output"),
               text: card.outputText!,
             })
         : isError
           ? renderToolDataBlock({
-              label: "Tool error",
+              label: t("chat.toolCards.toolError"),
               text: "No output — tool failed.",
             })
-          : nothing}
+          : isToolCardRunning(card)
+            ? html`<div class="chat-tool-card__running">${t("chat.toolCards.runningHint")}</div>`
+            : nothing}
     </div>
   `;
 }

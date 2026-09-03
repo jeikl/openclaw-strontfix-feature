@@ -263,12 +263,14 @@ function buildToolStreamMessage(entry: ToolStreamEntry): Record<string, unknown>
   const content: Array<Record<string, unknown>> = [];
   content.push({
     type: "toolcall",
+    id: entry.toolCallId,
     name: entry.name,
-    arguments: entry.args ?? {},
+    ...(entry.args !== undefined ? { arguments: entry.args } : {}),
   });
   if (entry.output) {
     content.push({
       type: "toolresult",
+      id: entry.toolCallId,
       name: entry.name,
       text: entry.output,
     });
@@ -1130,6 +1132,7 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
   }
   const name = typeof data.name === "string" ? data.name : "tool";
   const phase = typeof data.phase === "string" ? data.phase : "";
+  // Args only arrive on start today; keep them on later update/result events.
   const args = phase === "start" ? data.args : undefined;
   const output =
     phase === "update"

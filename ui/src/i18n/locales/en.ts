@@ -1699,6 +1699,11 @@ export const en: TranslationMap = {
     },
     toolCards: {
       toolError: "Tool error",
+      input: "Input",
+      output: "Output",
+      running: "Running",
+      runningHint: "Still running…",
+      noOutput: "No output — tool completed successfully.",
     },
     workspaceFiles: {
       label: "Session workspace",

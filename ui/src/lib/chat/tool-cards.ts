@@ -6,7 +6,7 @@ import {
   isToolResultContentType,
   resolveToolUseId,
 } from "../../../../src/chat/tool-content.js";
-import type { ToolCard } from "./chat-types.ts";
+import type { ToolCard, ToolCardStatus } from "./chat-types.ts";
 import { extractTextCached } from "./message-extract.ts";
 import { isToolResultMessage } from "./message-normalizer.ts";
 
@@ -186,8 +186,45 @@ function resolveToolCardId(
   return `${prefix}:${name}:${index}`;
 }
 
-function serializeToolInput(args: unknown): string | undefined {
+function hasRenderableToolArgs(args: unknown): boolean {
   if (args === undefined || args === null) {
+    return false;
+  }
+  if (typeof args === "string") {
+    return args.trim().length > 0;
+  }
+  if (Array.isArray(args)) {
+    return args.length > 0;
+  }
+  if (typeof args === "object") {
+    return Object.keys(args as object).length > 0;
+  }
+  return true;
+}
+
+function resolveToolCardStatus(params: {
+  isError?: boolean;
+  hasOutput: boolean;
+  isLive: boolean;
+}): ToolCardStatus | undefined {
+  if (params.isError) {
+    return "error";
+  }
+  if (params.hasOutput) {
+    return "completed";
+  }
+  if (params.isLive) {
+    return "running";
+  }
+  return undefined;
+}
+
+export function isToolCardRunning(card: ToolCard): boolean {
+  return card.status === "running";
+}
+
+function serializeToolInput(args: unknown): string | undefined {
+  if (!hasRenderableToolArgs(args)) {
     return undefined;
   }
   if (typeof args === "string") {
@@ -272,6 +309,7 @@ export function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] 
   const cards: ToolCard[] = [];
   const fallbackMatchedCards = new WeakSet<ToolCard>();
   const transcriptMessageId = resolveTranscriptMessageId(m);
+  const isLive = typeof m.runId === "string" && Boolean(m.runId.trim());
 
   for (let index = 0; index < content.length; index++) {
     const item = content[index] ?? {};
@@ -280,7 +318,8 @@ export function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] 
       (typeof item.name === "string" &&
         (item.arguments != null || item.args != null || item.input != null));
     if (isToolCall) {
-      const args = coerceArgs(item.arguments ?? item.args ?? item.input);
+      const rawArgs = coerceArgs(item.arguments ?? item.args ?? item.input);
+      const args = hasRenderableToolArgs(rawArgs) ? rawArgs : undefined;
       const callId = resolveToolCallId(item, m);
       cards.push({
         id: resolveToolCardId(item, m, index, prefix),
@@ -289,6 +328,7 @@ export function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] 
         args,
         inputText: serializeToolInput(args),
         messageId: transcriptMessageId,
+        status: resolveToolCardStatus({ isLive, hasOutput: false }),
       });
       continue;
     }
@@ -309,6 +349,11 @@ export function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] 
         if (isError !== undefined) {
           existing.isError = isError;
         }
+        existing.status = resolveToolCardStatus({
+          isError: existing.isError,
+          hasOutput: true,
+          isLive,
+        });
         continue;
       }
       cards.push({
@@ -319,6 +364,7 @@ export function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] 
         messageId: transcriptMessageId,
         ...(isError !== undefined ? { isError } : {}),
         preview,
+        status: resolveToolCardStatus({ isError, hasOutput: true, isLive }),
       });
     }
   }
@@ -346,6 +392,11 @@ export function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] 
       messageId: transcriptMessageId,
       ...(messageIsError !== undefined ? { isError: messageIsError } : {}),
       preview: extractToolPreview(text, name),
+      status: resolveToolCardStatus({
+        isError: messageIsError,
+        hasOutput: text !== undefined,
+        isLive,
+      }),
     });
   }
 

@@ -1012,4 +1012,64 @@ describe("app-tool-stream fallback lifecycle handling", () => {
 
     vi.useRealTimers();
   });
+
+  it("keeps tool start args after a later result event", () => {
+    useToolStreamFakeTimers();
+    const host = createHost();
+
+    handleAgentEvent(
+      host,
+      agentEvent("run-exec", 1, "tool", {
+        phase: "start",
+        name: "exec",
+        toolCallId: "call-exec",
+        args: { command: "openai_chat" },
+      }),
+    );
+    vi.advanceTimersByTime(80);
+
+    const started = host.toolStreamById.get("call-exec");
+    expect(started?.args).toEqual({ command: "openai_chat" });
+    expect(started?.message).toMatchObject({
+      runId: "run-exec",
+      toolCallId: "call-exec",
+      content: [
+        {
+          type: "toolcall",
+          id: "call-exec",
+          name: "exec",
+          arguments: { command: "openai_chat" },
+        },
+      ],
+    });
+
+    handleAgentEvent(
+      host,
+      agentEvent("run-exec", 2, "tool", {
+        phase: "result",
+        name: "exec",
+        toolCallId: "call-exec",
+        result: "phase: long_running → succeeded",
+      }),
+    );
+
+    const finished = host.toolStreamById.get("call-exec");
+    expect(finished?.args).toEqual({ command: "openai_chat" });
+    expect(finished?.output).toContain("phase: long_running → succeeded");
+    expect(finished?.message.content).toEqual([
+      {
+        type: "toolcall",
+        id: "call-exec",
+        name: "exec",
+        arguments: { command: "openai_chat" },
+      },
+      {
+        type: "toolresult",
+        id: "call-exec",
+        name: "exec",
+        text: "phase: long_running → succeeded",
+      },
+    ]);
+    vi.useRealTimers();
+  });
 });

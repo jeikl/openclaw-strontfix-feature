@@ -81,6 +81,42 @@ describe("tool-card extraction", () => {
     expect(cards[0]?.outputText).toBeUndefined();
   });
 
+  it("drops empty object args and marks live calls without output as running", () => {
+    const empty = extractToolCards(
+      {
+        role: "assistant",
+        runId: "run-1",
+        toolCallId: "call-empty",
+        content: [{ type: "toolcall", id: "call-empty", name: "exec", arguments: {} }],
+      },
+      "msg:empty",
+    );
+    expect(empty[0]?.inputText).toBeUndefined();
+    expect(empty[0]?.args).toBeUndefined();
+    expect(empty[0]?.status).toBe("running");
+
+    const done = extractToolCards(
+      {
+        role: "assistant",
+        runId: "run-1",
+        toolCallId: "call-done",
+        content: [
+          {
+            type: "toolcall",
+            id: "call-done",
+            name: "exec",
+            arguments: { command: "ls" },
+          },
+          { type: "toolresult", id: "call-done", name: "exec", text: "ok" },
+        ],
+      },
+      "msg:done",
+    );
+    expect(done[0]?.status).toBe("completed");
+    expect(done[0]?.inputText).toContain("ls");
+    expect(done[0]?.outputText).toBe("ok");
+  });
+
   it("preserves tool-call input payloads from tool_use blocks", () => {
     const cards = extractToolCards(
       {
@@ -340,12 +376,12 @@ describe("tool-card extraction", () => {
 
 **Tool:** \`deck_manage\`
 
-### Tool input
+### Input
 \`\`\`text
 with Example Deck
 \`\`\`
 
-### Tool output
+### Output
 *No output — tool completed successfully.*`);
   });
 

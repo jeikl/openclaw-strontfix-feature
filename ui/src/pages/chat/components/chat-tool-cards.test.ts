@@ -114,7 +114,7 @@ describe("tool-cards", () => {
     const blocks = Array.from(container.querySelectorAll(".chat-tool-card__block"));
     expect(
       blocks.map((block) => block.querySelector(".chat-tool-card__block-label")?.textContent),
-    ).toEqual(["Tool input", "Tool output"]);
+    ).toEqual(["Input", "Output"]);
     expect(blocks.map((block) => block.querySelector("code")?.textContent)).toEqual([
       '{\n  "url": "https://example.com"\n}',
       "Opened page",
@@ -168,10 +168,32 @@ describe("tool-cards", () => {
     const blocks = Array.from(container.querySelectorAll(".chat-tool-card__block"));
     expect(
       blocks.map((block) => block.querySelector(".chat-tool-card__block-label")?.textContent),
-    ).toEqual(["Tool input"]);
+    ).toEqual(["Input"]);
     expect(blocks[0]?.querySelector("code")?.textContent).toBe(
       '{\n  "mode": "session",\n  "thread": true\n}',
     );
+  });
+
+  it("shows an independent spinner on live running cards", () => {
+    const container = document.createElement("div");
+    render(
+      renderToolCard(
+        {
+          id: "msg:running",
+          name: "web_search",
+          args: { query: "openclaw" },
+          inputText: '{\n  "query": "openclaw"\n}',
+          status: "running",
+        },
+        { expanded: true, onToggleExpanded: vi.fn() },
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".chat-tool-msg-summary--running")).not.toBeNull();
+    expect(container.querySelector(".chat-tool-msg-summary__spinner")).not.toBeNull();
+    expect(container.querySelector(".chat-tool-card__running")?.textContent).toBe("Still running…");
+    expect(container.querySelector(".chat-tool-card__block-label")?.textContent).toBe("Input");
   });
 
   it("labels collapsed tool calls with the display summary", () => {
@@ -358,7 +380,7 @@ describe("tool-cards", () => {
 
     expect(rawToggle!.getAttribute("aria-expanded")).toBe("true");
     expect(rawBody!.hidden).toBe(false);
-    expect(rawBody!.querySelector(".chat-tool-card__block-label")?.textContent).toBe("Tool output");
+    expect(rawBody!.querySelector(".chat-tool-card__block-label")?.textContent).toBe("Output");
     expect(rawBody!.querySelector("code.markdown-block-art")).toBeNull();
     expect(JSON.parse(rawBody!.querySelector("code")?.textContent ?? "{}")).toEqual({
       kind: "canvas",
@@ -656,7 +678,7 @@ describe("tool-cards", () => {
     expect(container.querySelector(".chat-tool-msg-summary__error-badge")).toBeNull();
   });
 
-  it("keeps Tool output labelling for successful results", () => {
+  it("keeps Output labelling for successful results", () => {
     const container = document.createElement("div");
     render(
       renderToolCard(
@@ -670,7 +692,7 @@ describe("tool-cards", () => {
       container,
     );
 
-    expect(container.textContent).toContain("Tool output");
+    expect(container.textContent).toContain("Output");
     expect(container.textContent).not.toContain("Tool error");
     expect(container.querySelector(".chat-tool-msg-summary--error")).toBeNull();
     expect(container.querySelector(".chat-tool-card__status-badge")).toBeNull();

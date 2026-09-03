@@ -1390,7 +1390,7 @@ describe("grouped chat rendering", () => {
     const blocks = Array.from(container.querySelectorAll(".chat-tool-card__block"));
     expect(
       blocks.map((block) => block.querySelector(".chat-tool-card__block-label")?.textContent),
-    ).toEqual(["Tool input", "Tool output"]);
+    ).toEqual(["Input", "Output"]);
     expect(blocks.map((block) => block.querySelector("code")?.textContent)).toEqual([
       '{\n  "url": "https://example.com"\n}',
       "Opened page",
@@ -1426,7 +1426,7 @@ describe("grouped chat rendering", () => {
       isToolMessageExpanded: () => true,
     });
 
-    expect(container.querySelector(".chat-tool-card__block-label")?.textContent).toBe("Tool input");
+    expect(container.querySelector(".chat-tool-card__block-label")?.textContent).toBe("Input");
     expect(container.querySelector(".chat-tool-card__block code")?.textContent).toBe(
       '{\n  "mode": "session",\n  "thread": true\n}',
     );
@@ -1597,7 +1597,7 @@ describe("grouped chat rendering", () => {
     const blocks = Array.from(container.querySelectorAll(".chat-tool-card__block"));
     expect(
       blocks.map((block) => block.querySelector(".chat-tool-card__block-label")?.textContent),
-    ).toEqual(["Tool input", "Tool error"]);
+    ).toEqual(["Input", "Tool error"]);
     expect(blocks[0]?.querySelector("code")?.textContent).toBe(
       '{\n  "mode": "session",\n  "thread": true\n}',
     );
@@ -1636,8 +1636,8 @@ describe("grouped chat rendering", () => {
 
     const summary = expectElement(container, ".chat-tool-msg-summary", HTMLButtonElement);
     expect(summary.classList.contains("chat-tool-msg-summary--error")).toBe(false);
-    expect(summary.querySelector(".chat-tool-msg-summary__label")?.textContent).toBe("Tool output");
-    expect(summary.querySelector(".chat-tool-msg-summary__names")?.textContent).toBe("web_search");
+    expect(summary.querySelector(".chat-tool-msg-summary__label")?.textContent).toBe("Web Search");
+    expect(summary.querySelector(".chat-tool-msg-summary__names")?.textContent).toBeFalsy();
     expect(summary.querySelector(".chat-tool-msg-summary__error-badge")).toBeNull();
     expect(container.querySelector(".chat-tool-msg-body")).toBeNull();
   });
@@ -1670,10 +1670,10 @@ describe("grouped chat rendering", () => {
 
     const summary = expectElement(container, ".chat-tool-msg-summary", HTMLButtonElement);
     expect(summary.classList.contains("chat-tool-msg-summary--error")).toBe(false);
-    expect(summary.querySelector(".chat-tool-msg-summary__label")?.textContent).toBe("Tool output");
-    expect(summary.querySelector(".chat-tool-msg-summary__names")?.textContent).toBe(
+    expect(summary.querySelector(".chat-tool-msg-summary__label")?.textContent).toBe(
       "memory_forget",
     );
+    expect(summary.querySelector(".chat-tool-msg-summary__names")?.textContent).toBeFalsy();
     expect(summary.querySelector(".chat-tool-msg-summary__error-badge")).toBeNull();
   });
 
@@ -1721,7 +1721,9 @@ describe("grouped chat rendering", () => {
     expect(summary.classList.contains("chat-tool-msg-summary--error")).toBe(true);
     expect(summary.querySelector(".chat-tool-msg-summary__label")?.textContent).toBe("Tool error");
     expect(
-      JSON.parse(container.querySelector(".chat-json-content code")?.textContent ?? "{}"),
+      JSON.parse(
+        container.querySelector(".chat-tool-card__block-content code")?.textContent ?? "{}",
+      ),
     ).toEqual({ status: "error" });
     container.remove();
   });
@@ -1751,7 +1753,7 @@ describe("grouped chat rendering", () => {
 
     const summary = expectElement(container, ".chat-tool-msg-summary", HTMLButtonElement);
     expect(summary.classList.contains("chat-tool-msg-summary--error")).toBe(false);
-    expect(summary.querySelector(".chat-tool-msg-summary__label")?.textContent).toBe("Tool output");
+    expect(summary.querySelector(".chat-tool-msg-summary__label")?.textContent).toBe("Sub-agent");
     expect(summary.querySelector(".chat-tool-msg-summary__error-badge")).toBeNull();
   });
 
@@ -1791,12 +1793,15 @@ describe("grouped chat rendering", () => {
       isToolMessageExpanded: () => true,
     });
 
-    expect(container.querySelector(".chat-tool-card__block-label")?.textContent).toBe("Tool input");
+    expect(container.querySelector(".chat-tool-card__block-label")?.textContent).toBe("Input");
     expect(container.querySelector(".chat-tool-card__block code")?.textContent).toBe(
       '{\n  "mode": "session",\n  "thread": true\n}',
     );
     expect(
-      JSON.parse(container.querySelector(".chat-json-content code")?.textContent ?? "{}"),
+      JSON.parse(
+        Array.from(container.querySelectorAll(".chat-tool-card__block-content code")).at(-1)
+          ?.textContent ?? "{}",
+      ),
     ).toEqual({
       status: "error",
     });
@@ -1805,9 +1810,11 @@ describe("grouped chat rendering", () => {
       isToolMessageExpanded: (messageId) => !messageId.startsWith("toolmsg:assistant:"),
     });
 
-    expect(container.querySelector(".chat-tool-card__block")).toBeNull();
+    expect(container.querySelector(".chat-tool-card__block-label")?.textContent).toBe("Tool error");
     expect(
-      JSON.parse(container.querySelector(".chat-json-content code")?.textContent ?? "{}"),
+      JSON.parse(
+        container.querySelector(".chat-tool-card__block-content code")?.textContent ?? "{}",
+      ),
     ).toEqual({
       status: "error",
     });
@@ -3034,10 +3041,10 @@ describe("grouped chat rendering", () => {
     );
     expect(
       container.querySelector(".chat-group.tool .chat-tool-msg-summary__label")?.textContent,
-    ).toBe("Tool output");
+    ).toBe("canvas_render");
     expect(
       container.querySelector(".chat-group.tool .chat-tool-msg-summary__names")?.textContent,
-    ).toBe("canvas_render");
+    ).toBeFalsy();
   });
 
   it("opens generic tool details instead of a canvas preview from tool rows", () => {

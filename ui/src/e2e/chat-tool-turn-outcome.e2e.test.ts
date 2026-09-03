@@ -65,7 +65,7 @@ describeControlUiE2e("Control UI autonomous tool-turn outcomes", () => {
 
     expect(await page.locator(".chat-tool-msg-summary__label").allTextContents()).toEqual([
       "Tool error",
-      "Tool output",
+      "Shell",
     ]);
     await context.close();
   });

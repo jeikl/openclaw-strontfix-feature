@@ -1663,6 +1663,11 @@ export const zh_CN: TranslationMap = {
     },
     toolCards: {
       toolError: "工具错误",
+      input: "输入",
+      output: "输出",
+      running: "执行中",
+      runningHint: "正在执行…",
+      noOutput: "没有输出 — 工具已成功完成。",
     },
     workspaceFiles: {
       label: "会话工作区",

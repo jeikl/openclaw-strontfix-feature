@@ -289,7 +289,23 @@ function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
   return result;
 }
 
-function mergeToolCallResultPair(callItem: ChatItem, resultItem: ChatItem): ChatItem | null {
+function isAttachableToolResultItem(item: ChatItem): boolean {
+  if (item.kind !== "message") {
+    return false;
+  }
+  const record = asRecord(item.message);
+  if (!record) {
+    return false;
+  }
+  const content = Array.isArray(record.content) ? record.content : [];
+  if (content.some((block) => isToolCallContentType(asRecord(block)?.type))) {
+    return false;
+  }
+  const normalized = safeNormalizeMessage(item.message);
+  return Boolean(normalized && normalizeRoleForGrouping(normalized.role) === "tool");
+}
+
+function mergeToolResultIntoCallItem(callItem: ChatItem, resultItem: ChatItem): ChatItem | null {
   if (callItem.kind !== "message" || resultItem.kind !== "message") {
     return null;
   }
@@ -316,12 +332,30 @@ function mergeToolCallResultPair(callItem: ChatItem, resultItem: ChatItem): Chat
     resultItem.message,
     `${resultItem.key}:activity-result`,
   );
-  if (callCards.length !== 1 || resultCards.length !== 1) {
+  if (resultCards.length !== 1) {
     return null;
   }
-  const [callCard] = callCards;
   const [resultCard] = resultCards;
-  const resultName = resultCard.name === "tool" ? callCard.name : resultCard.name;
+  const resultName = resultCard.name === "tool" ? undefined : resultCard.name;
+  const callCard = callCards.find((candidate) => {
+    if (!candidate.callId || !resultCard.callId || candidate.callId !== resultCard.callId) {
+      return false;
+    }
+    if (candidate.outputText !== undefined) {
+      return false;
+    }
+    if (
+      resultName &&
+      normalizeLowercaseStringOrEmpty(candidate.name) !==
+        normalizeLowercaseStringOrEmpty(resultName)
+    ) {
+      return false;
+    }
+    return true;
+  });
+  if (!callCard) {
+    return null;
+  }
   const rawResultContent = Array.isArray(resultMessage.content) ? resultMessage.content : [];
   const resultOnlyContent = rawResultContent.filter(
     (block) => !isToolCallContentType(asRecord(block)?.type),
@@ -331,12 +365,7 @@ function mergeToolCallResultPair(callItem: ChatItem, resultItem: ChatItem): Chat
   );
   const hasToolResult =
     hasToolResultBlock || resultCard.outputText !== undefined || resultCard.isError !== undefined;
-  if (
-    !callCard.callId ||
-    callCard.callId !== resultCard.callId ||
-    !hasToolResult ||
-    normalizeLowercaseStringOrEmpty(callCard.name) !== normalizeLowercaseStringOrEmpty(resultName)
-  ) {
+  if (!hasToolResult) {
     return null;
   }
 
@@ -349,7 +378,7 @@ function mergeToolCallResultPair(callItem: ChatItem, resultItem: ChatItem): Chat
         {
           type: "tool_result",
           id: resultCard.callId,
-          name: resultName,
+          name: resultName ?? callCard.name,
           text: resultCard.outputText ?? "",
           ...(resultCard.isError !== undefined ? { isError: resultCard.isError } : {}),
         },
@@ -368,14 +397,46 @@ function mergeToolCallResultPair(callItem: ChatItem, resultItem: ChatItem): Chat
 
 function coalesceToolActivityMessages(items: ChatItem[]): ChatItem[] {
   const coalesced: ChatItem[] = [];
-  for (const item of items) {
-    const previous = coalesced[coalesced.length - 1];
-    const merged = previous ? mergeToolCallResultPair(previous, item) : null;
-    if (merged) {
-      coalesced[coalesced.length - 1] = merged;
-    } else {
-      coalesced.push(item);
+  const hostIndexByCallId = new Map<string, number>();
+
+  const registerCallHosts = (item: ChatItem, index: number) => {
+    if (item.kind !== "message") {
+      return;
     }
+    const role = asRecord(item.message)?.role;
+    if (typeof role !== "string" || role.toLowerCase() !== "assistant") {
+      return;
+    }
+    for (const card of extractToolCardsCached(item.message, `${item.key}:activity-call`)) {
+      if (card.callId) {
+        hostIndexByCallId.set(card.callId, index);
+      }
+    }
+  };
+
+  for (const item of items) {
+    if (isAttachableToolResultItem(item)) {
+      const resultCards = extractToolCardsCached(item.message, `${item.key}:activity-result`);
+      const callId = resultCards.length === 1 ? resultCards[0]?.callId : undefined;
+      const hostIndex = callId ? hostIndexByCallId.get(callId) : undefined;
+      if (hostIndex != null) {
+        const merged = mergeToolResultIntoCallItem(coalesced[hostIndex], item);
+        if (merged) {
+          coalesced[hostIndex] = merged;
+          registerCallHosts(merged, hostIndex);
+          continue;
+        }
+      }
+      const previous = coalesced[coalesced.length - 1];
+      const mergedAdjacent = previous ? mergeToolResultIntoCallItem(previous, item) : null;
+      if (mergedAdjacent) {
+        coalesced[coalesced.length - 1] = mergedAdjacent;
+        registerCallHosts(mergedAdjacent, coalesced.length - 1);
+        continue;
+      }
+    }
+    coalesced.push(item);
+    registerCallHosts(item, coalesced.length - 1);
   }
   return coalesced;
 }
