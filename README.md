@@ -197,10 +197,13 @@ pnpm build:fast
 
 ## 相关项目
 
-| 项目                                                                                       | 说明                                            |
-| ------------------------------------------------------------------------------------------ | ----------------------------------------------- |
-| [OpenClaw](https://github.com/openclaw/openclaw)                                           | 原版 OpenClaw                                   |
-| [钉钉连接器（社区版）](https://github.com/jeikl/dingtalk-openclaw-connector-fix-Community) | `@jeik/dingtalk-connector` — 钉钉社区增强版插件 |
+| 项目                                                                                       | 说明                                                                                                                         |
+| ------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
+| [OpenClaw](https://github.com/openclaw/openclaw)                                           | 原版 OpenClaw                                                                                                                |
+| [钉钉连接器（社区版）](https://github.com/jeikl/dingtalk-openclaw-connector-fix-Community) | `@jeik/dingtalk-connector` — 钉钉社区增强版插件                                                                              |
+| [JeikCode](https://github.com/jeikl/jeikcode)                                              | 极速、自主的终端 AI Coding Agent（Rust 驱动）— 更好的上下文管理与模型编程性能，代码索引超越 Codex / Grok Build / Claude Code |
+
+> 🤖 **搭配 [JeikCode](https://github.com/jeikl/jeikcode) 使用效果更佳**：Rust 原生内核、自研 CodeExplore 加权 AST + 中英双语语义检索（效率 +60–70%、准确率 90%+）、严格 Append-Only KV Cache 保护（`sacred_floor` + `user-wrap.md`）、五级工具自愈链与 Loop Guard 熔断。安装：`curl -fsSL https://raw.githubusercontent.com/jeikl/jeikcode/local-dev/scripts/install.sh | bash`
 
 ---
 
