@@ -100,8 +100,8 @@ Model note: while many providers and models are supported, prefer a current flag
 Runtime: **Node 24.15+ (recommended), Node 22.22.3+, or Node 25.9+**.
 
 ```bash
-npm install -g openclaw@latest
-# or: pnpm add -g openclaw@latest
+npm install -g jeikclaw@latest
+# or: pnpm add -g jeikclaw@latest
 
 openclaw onboard --install-daemon
 ```
